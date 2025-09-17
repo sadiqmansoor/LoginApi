@@ -46,13 +46,13 @@ jobs:
         target: "/home/${{ vars.EC2_USER }}/deploy"
 
     # ───── SSH into EC2 and Deploy ─────
-    - name: SSH and deploy to EC2
-      uses: appleboy/ssh-action@v0.1.10
-      with:
-        host: ${{ vars.EC2_HOST }}
-        username: ${{ vars.EC2_USER }}
-        key: ${{ secrets.EC2_SSH_KEY }}
-        script: |
+    - - name: SSH and deploy to EC2
+  uses: appleboy/ssh-action@v0.1.10
+  with:
+    host: ${{ vars.EC2_HOST }}
+    username: ${{ vars.EC2_USER }}
+    key: ${{ secrets.EC2_SSH_KEY }}
+    script: |
           # ───── Install PostgreSQL ─────
           sudo apt update
           sudo apt install -y postgresql postgresql-contrib
