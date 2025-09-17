@@ -21,7 +21,7 @@ jobs:
 
     # ───── Restore Dependencies ─────
     - name: Restore packages
-      run: dotnet restore LoginApi/LoginApi.csproj
+      run: dotnet restore LoginApi.csproj
 
     # ───── Build Project ─────
     - name: Build project
