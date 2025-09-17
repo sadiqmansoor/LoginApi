@@ -8,33 +8,26 @@ jobs:
   deploy-loginapi:
     runs-on: ubuntu-latest
     steps:
-      # ───── Checkout Code ─────
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # ───── Setup .NET SDK ─────
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
-      # ───── Restore Dependencies ─────
       - name: Restore packages
         run: dotnet restore LoginApi.csproj
 
-      # ───── Build Project ─────
       - name: Build project
         run: dotnet build LoginApi.csproj --configuration Release
 
-      # ───── Publish Project ─────
       - name: Publish project
         run: dotnet publish LoginApi.csproj -c Release -o ./publish
 
-      # ───── Compress Published Files ─────
       - name: Zip published output
         run: zip -r loginapi.zip ./publish
 
-      # ───── Upload to EC2 ─────
       - name: Upload zip to EC2
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -44,7 +37,6 @@ jobs:
           source: "loginapi.zip"
           target: "/home/${{ vars.EC2_USER }}/deploy"
 
-      # ───── SSH into EC2 and Deploy ─────
       - name: SSH and deploy to EC2
         uses: appleboy/ssh-action@v0.1.10
         with:
@@ -52,66 +44,6 @@ jobs:
           username: ${{ vars.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            # ───── Install PostgreSQL ─────
-            sudo apt update
-            sudo apt install -y postgresql postgresql-contrib
-
-            # ───── Start PostgreSQL ─────
-            sudo systemctl enable postgresql
-            sudo systemctl start postgresql
-
-            # ───── Create Role if Not Exists ─────
-            sudo -u postgres psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'login_user') THEN CREATE ROLE login_user WITH LOGIN PASSWORD 'secure_password'; END IF; END \$\$;"
-
-            # ───── Create Database if Not Exists ─────
-            DB_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='login_db'")
-            if [ "$DB_EXISTS" != "1" ]; then
-              sudo -u postgres createdb -O login_user login_db
-            fi
-
-            # ───── Ensure Deployment Directory Exists ─────
-            sudo mkdir -p /var/www/loginapi
-            sudo chown $USER:$USER /var/www/loginapi
-
-            # ───── Install .NET SDK if Missing ─────
-            if ! command -v dotnet &> /dev/null; then
-              echo ".NET SDK not found. Installing .NET 8..."
-              wget https://dotnet.microsoft.com/download/dotnet/scripts/v1/dotnet-install.sh
-              chmod +x dotnet-install.sh
-              ./dotnet-install.sh --version 8.0.100
-              export DOTNET_ROOT=$HOME/.dotnet
-              export PATH=$PATH:$DOTNET_ROOT
-            fi
-
-            # ───── Unzip and Deploy ─────
             unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
-
-            # ───── Apply EF Core Migrations ─────
             cd /var/www/loginapi
-            dotnet LoginApi.dll --apply-migrations
-
-            # ───── Create kestrel-loginapi.service if Missing ─────
-            SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
-            if [ ! -f "$SERVICE_PATH" ]; then
-              echo "[Unit]
-Description=LoginApi .NET Web App
-
-[Service]
-WorkingDirectory=/var/www/loginapi
-ExecStart=/usr/bin/dotnet /var/www/loginapi/LoginApi.dll
-Restart=always
-RestartSec=10
-KillSignal=SIGINT
-SyslogIdentifier=loginapi
-User=www-data
-Environment=ASPNETCORE_ENVIRONMENT=Production
-
-[Install]
-WantedBy=multi-user.target" | sudo tee $SERVICE_PATH > /dev/null
-
-              sudo systemctl daemon-reexec
-              sudo systemctl daemon-reload
-              sudo systemctl enable kestrel-loginapi.service
-            fi
-            # ───── Restart Backend Service ─────
-            sudo systemctl restart kestrel-loginapi.service
+            dotnet LoginApi.dll
