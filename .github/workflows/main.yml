@@ -62,19 +62,23 @@ jobs:
           sudo systemctl start postgresql
 
           # ───── Create DB and User ─────
-          echo "DO \$\$ 
-          BEGIN
-            IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'login_user') THEN
-              CREATE ROLE login_user WITH LOGIN PASSWORD 'secure_password';
-            END IF;
-            IF NOT EXISTS (SELECT FROM pg_database WHERE datname = 'login_db') THEN
-              CREATE DATABASE login_db OWNER login_user;
-            END IF;
-          END
-          \$\$;" | sudo -u postgres psql
+        # ───── Create Role if Not Exists ─────
+          sudo -u postgres psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'login_user') THEN CREATE ROLE login_user WITH LOGIN PASSWORD 'secure_password'; END IF; END \$\$;"
+
+        # ───── Create Database if Not Exists ─────
+          DB_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='login_db'")
+          if [ "$DB_EXISTS" != "1" ]; then
+            sudo -u postgres createdb -O login_user login_db
+          fi
+
+         script: |
+          ...
+              # ───── Ensure Deployment Directory Exists ─────
+              sudo mkdir -p /var/www/loginapi
+              sudo chown $USER:$USER /var/www/loginapi
 
           # ───── Unzip and Deploy ─────
-          unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
+            unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
 
           # ───── Apply EF Core Migrations ─────
           cd /var/www/loginapi
