@@ -91,11 +91,10 @@ jobs:
           cd /var/www/loginapi
           dotnet LoginApi.dll --apply-migrations
 
-          # ───── Create kestrel-loginapi.service if Missing ─────
         # ───── Create kestrel-loginapi.service if Missing ─────
-SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
-if [ ! -f "$SERVICE_PATH" ]; then
-  sudo bash -c "cat > $SERVICE_PATH" <<'EOL'
+          SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
+          if [ ! -f "$SERVICE_PATH" ]; then
+          sudo bash -c "cat > $SERVICE_PATH" <<'EOL'
 [Unit]
 Description=LoginApi .NET Web App
 
