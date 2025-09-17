@@ -25,11 +25,11 @@ jobs:
 
     # ───── Build Project ─────
     - name: Build project
-      run: dotnet build LoginApi/LoginApi.csproj --configuration Release
+      run: dotnet build LoginApi.csproj --configuration Release
 
     # ───── Publish Project ─────
     - name: Publish project
-      run: dotnet publish LoginApi/LoginApi.csproj -c Release -o ./publish
+      run: dotnet publish LoginApi.csproj -c Release -o ./publish
 
     # ───── Compress Published Files ─────
     - name: Zip published output
