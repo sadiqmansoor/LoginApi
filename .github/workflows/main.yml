@@ -73,7 +73,7 @@ jobs:
             END IF;
           END
           \$\$;
-EOF
+        EOF
 
           # ───── Unzip and Deploy ─────
           unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
