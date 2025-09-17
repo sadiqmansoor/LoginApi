@@ -90,10 +90,10 @@ jobs:
             cd /var/www/loginapi
             dotnet LoginApi.dll --apply-migrations
 
-            # ───── Create kestrel-loginapi.service if Missing ─────
-            SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
+           # ───── Create kestrel-loginapi.service if Missing ─────
+          SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
             if [ ! -f "$SERVICE_PATH" ]; then
-              sudo bash -c "cat > $SERVICE_PATH" <<'EOL'
+              sudo tee $SERVICE_PATH > /dev/null <<EOF
 [Unit]
 Description=LoginApi .NET Web App
 
@@ -109,11 +109,11 @@ Environment=ASPNETCORE_ENVIRONMENT=Production
 
 [Install]
 WantedBy=multi-user.target
-EOL
-              sudo systemctl daemon-reexec
-              sudo systemctl daemon-reload
-              sudo systemctl enable kestrel-loginapi.service
-            fi
+EOF
 
+  sudo systemctl daemon-reexec
+  sudo systemctl daemon-reload
+  sudo systemctl enable kestrel-loginapi.service
+fi
             # ───── Restart Backend Service ─────
             sudo systemctl restart kestrel-loginapi.service
