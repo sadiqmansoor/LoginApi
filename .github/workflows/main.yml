@@ -95,7 +95,6 @@ jobs:
             if [ ! -f "$SERVICE_PATH" ]; then
               echo "[Unit]
 Description=LoginApi .NET Web App
-
 [Service]
 WorkingDirectory=/var/www/loginapi
 ExecStart=/usr/bin/dotnet /var/www/loginapi/LoginApi.dll
