@@ -92,9 +92,8 @@ jobs:
 
            # ───── Create kestrel-loginapi.service if Missing ─────
           SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
-            if [ ! -f "$SERVICE_PATH" ]; then
-              sudo tee $SERVICE_PATH > /dev/null <<EOF
-[Unit]
+           if [ ! -f "$SERVICE_PATH" ]; then
+             echo "[Unit]
 Description=LoginApi .NET Web App
 
 [Service]
@@ -108,8 +107,7 @@ User=www-data
 Environment=ASPNETCORE_ENVIRONMENT=Production
 
 [Install]
-WantedBy=multi-user.target
-EOF
+WantedBy=multi-user.target" | sudo tee $SERVICE_PATH > /dev/null
 
   sudo systemctl daemon-reexec
   sudo systemctl daemon-reload
