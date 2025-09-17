@@ -71,9 +71,7 @@ jobs:
             sudo -u postgres createdb -O login_user login_db
           fi
 
-         script: |
-          ...
-              # ───── Ensure Deployment Directory Exists ─────
+         script: # ───── Ensure Deployment Directory Exists ─────
               sudo mkdir -p /var/www/loginapi
               sudo chown $USER:$USER /var/www/loginapi
 
