@@ -62,8 +62,7 @@ jobs:
           sudo systemctl start postgresql
 
           # ───── Create DB and User ─────
-          sudo -u postgres psql <<EOF
-          DO \$\$
+          echo "DO \$\$ 
           BEGIN
             IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'login_user') THEN
               CREATE ROLE login_user WITH LOGIN PASSWORD 'secure_password';
@@ -72,8 +71,7 @@ jobs:
               CREATE DATABASE login_db OWNER login_user;
             END IF;
           END
-          \$\$;
-        EOF
+          \$\$;" | sudo -u postgres psql
 
           # ───── Unzip and Deploy ─────
           unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
