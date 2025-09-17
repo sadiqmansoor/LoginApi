@@ -36,7 +36,12 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           source: "loginapi.zip"
           target: "/home/${{ vars.EC2_USER }}/deploy"
-
+          
+       - name: Ensure deployment directory and dotnet installed
+        run: |
+        ssh <user>@<host> 'mkdir -p /var/www/loginapi'
+        ssh <user>@<host> 'which dotnet || (wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh && bash dotnet-install.sh --channel 8.0)'
+     
       - name: SSH and deploy to EC2
         uses: appleboy/ssh-action@v0.1.10
         with:
