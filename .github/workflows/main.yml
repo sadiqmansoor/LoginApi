@@ -45,6 +45,15 @@ jobs:
           username: ${{ vars.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+
+            # ───── Install PostgreSQL ─────
+            sudo apt-get update
+            sudo apt-get install -y postgresql postgresql-contrib
+            sudo systemctl enable postgresql
+            sudo systemctl start postgresql
+            sudo -u postgres psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'loginuser') THEN CREATE ROLE loginuser LOGIN PASSWORD 'securepassword'; END IF; END \$\$;"
+            sudo -u postgres psql -c "CREATE DATABASE logindb OWNER loginuser;"
+            
             # ───── Install .NET Runtime ─────
             wget https://dot.net/v1/dotnet-install.sh
             chmod +x dotnet-install.sh
