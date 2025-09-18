@@ -45,17 +45,24 @@ jobs:
           username: ${{ vars.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            sudo mkdir -p /var/www/loginapi
-            sudo unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
-            sudo chown -R www-data:www-data /var/www/loginapi
+             # ───── Install .NET Runtime ─────
+             wget https://dot.net/v1/dotnet-install.sh
+             chmod +x dotnet-install.sh
+             ./dotnet-install.sh --runtime aspnetcore --version 8.0
+             export DOTNET_ROOT=$HOME/.dotnet
+             export PATH=$PATH:$DOTNET_ROOT:$DOTNET_ROOT/tools
+             # ───── Prepare Deployment Directory ─────
+             sudo mkdir -p /var/www/loginapi
+             sudo unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
+             sudo chown -R www-data:www-data /var/www/loginapi
 
-            SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
-            if [ ! -f "$SERVICE_PATH" ]; then
+             SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
+             if [ ! -f "$SERVICE_PATH" ]; then
               sudo tee "$SERVICE_PATH" > /dev/null << 'EOF'
-            [Unit]
+             [Unit]
              Description=LoginApi .NET Web App
 
-            [Service]
+             [Service]
              WorkingDirectory=/var/www/loginapi
              ExecStart=/usr/bin/dotnet /var/www/loginapi/LoginApi.dll
              Restart=always
@@ -65,11 +72,11 @@ jobs:
              User=www-data
              Environment=ASPNETCORE_ENVIRONMENT=Production
 
-            [Install]
-            WantedBy=multi-user.target
-            EOF
+             [Install]
+             WantedBy=multi-user.target
+             EOF
               sudo systemctl daemon-reload
               sudo systemctl enable kestrel-loginapi.service
-            fi
+             fi
 
-            sudo systemctl restart kestrel-loginapi.service
+             sudo systemctl restart kestrel-loginapi.service
