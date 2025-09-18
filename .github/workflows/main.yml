@@ -58,7 +58,7 @@ using (var scope = app.Services.CreateScope())
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"⚠️ Migration error: {ex.Message}");
+        echo "⚠️ Migration error: ${ex.Message}";
     }
 }
 
