@@ -51,7 +51,7 @@ jobs:
 
             SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
             if [ ! -f "$SERVICE_PATH" ]; then
-              sudo tee "$SERVICE_PATH" > /dev/null <<EOF
+              sudo tee "$SERVICE_PATH" > /dev/null << 'EOF'
 [Unit]
 Description=LoginApi .NET Web App
 
