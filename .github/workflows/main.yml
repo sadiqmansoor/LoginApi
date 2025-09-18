@@ -27,7 +27,7 @@ jobs:
         run: dotnet publish LoginApi.csproj -c Release -o ./publish
 
       - name: Zip published output
-        run: zip -r loginapi.zip ./publish
+        run: cd publish && zip -r ../loginapi.zip .
 
       - name: Upload zip to EC2
         uses: appleboy/scp-action@v0.1.4
