@@ -9,33 +9,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ───── Checkout Code ─────
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # ───── Setup .NET SDK ─────
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
-      # ───── Restore Dependencies ─────
       - name: Restore packages
         run: dotnet restore LoginApi.csproj
 
-      # ───── Build Project ─────
       - name: Build project
         run: dotnet build LoginApi.csproj --configuration Release
 
-      # ───── Publish Project ─────
       - name: Publish project
         run: dotnet publish LoginApi.csproj -c Release -o ./publish
 
-      # ───── Compress Published Files ─────
       - name: Zip published output
         run: zip -r loginapi.zip ./publish
 
-      # ───── Upload to EC2 ─────
       - name: Upload zip to EC2
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -45,7 +38,6 @@ jobs:
           source: "loginapi.zip"
           target: "/home/${{ vars.EC2_USER }}/deploy"
 
-      # ───── SSH into EC2 and Deploy ─────
       - name: SSH and deploy to EC2
         uses: appleboy/ssh-action@v0.1.10
         with:
@@ -53,15 +45,13 @@ jobs:
           username: ${{ vars.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            # ───── Prepare Deployment Directory ─────
             sudo mkdir -p /var/www/loginapi
             sudo unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
             sudo chown -R www-data:www-data /var/www/loginapi
 
-            # ───── Create kestrel-loginapi.service if Missing ─────
             SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
             if [ ! -f "$SERVICE_PATH" ]; then
-              sudo bash -c 'cat > /etc/systemd/system/kestrel-loginapi.service' <<EOF
+              sudo tee "$SERVICE_PATH" > /dev/null <<EOF
 [Unit]
 Description=LoginApi .NET Web App
 
@@ -82,5 +72,4 @@ EOF
               sudo systemctl enable kestrel-loginapi.service
             fi
 
-            # ───── Restart the Service ─────
             sudo systemctl restart kestrel-loginapi.service
