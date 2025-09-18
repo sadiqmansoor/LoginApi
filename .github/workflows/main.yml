@@ -3,7 +3,6 @@ name: CI/CD for LoginApi to Ubuntu EC2
 on:
   push:
     branches: [ main ]
-
 jobs:
   deploy-loginapi:
     runs-on: ubuntu-latest
