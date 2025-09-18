@@ -10,6 +10,11 @@ var builder = WebApplication.CreateBuilder(args);
 
 // ───── Add Services ─────
 
+builder.WebHost.ConfigureKestrel(serverOptions =>
+{
+    serverOptions.ListenAnyIP(5000); // instead of localhost
+});
+
 // Swagger configuration
 builder.Services.AddSwaggerGen(c =>
 {
