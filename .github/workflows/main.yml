@@ -1,81 +1,59 @@
-using LoginApi.Data;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
-using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.OpenApi.Models;
+name: CI/CD for LoginApi to Ubuntu EC2
 
-var builder = WebApplication.CreateBuilder(args);
+on:
+  push:
+    branches: [ main ]
 
-// ───── Add Services ─────
+jobs:
+  deploy-loginapi:
+    runs-on: ubuntu-latest
 
-// Swagger configuration
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "Login API",
-        Version = "v1",
-        Description = "API for user authentication and data access"
-    });
-});
+    steps:
+      # ───── Checkout Code ─────
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-// PostgreSQL + EF Core
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+      # ───── Setup .NET SDK ─────
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
 
-// JWT Authentication
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        var jwtKey = builder.Configuration["Jwt:Key"];
-        if (string.IsNullOrEmpty(jwtKey))
-        {
-            throw new InvalidOperationException("JWT key is missing in configuration.");
-        }
+      # ───── Restore Dependencies ─────
+      - name: Restore packages
+        run: dotnet restore LoginApi.csproj
 
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = false,
-            ValidateAudience = false,
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
-        };
-    });
+      # ───── Build Project ─────
+      - name: Build project
+        run: dotnet build LoginApi.csproj --configuration Release
 
-builder.Services.AddAuthorization();
-builder.Services.AddControllers();
+      # ───── Publish Project ─────
+      - name: Publish project
+        run: dotnet publish LoginApi.csproj -c Release -o ./publish
 
-var app = builder.Build();
+      # ───── Compress Published Files ─────
+      - name: Zip published output
+        run: zip -r loginapi.zip ./publish
 
-// ───── Apply EF Core Migrations Safely ─────
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    try
-    {
-        db.Database.Migrate();
-    }
-    catch (Exception ex)
-    {
-        echo "⚠️ Migration error: ${ex.Message}";
-    }
-}
+      # ───── Upload to EC2 ─────
+      - name: Upload zip to EC2
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ vars.EC2_HOST }}
+          username: ${{ vars.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "loginapi.zip"
+          target: "/home/${{ vars.EC2_USER }}/deploy"
 
-// ───── Configure Middleware ─────
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Login API v1");
-        c.RoutePrefix = string.Empty; // Swagger at root
-    });
-}
-
-app.UseHttpsRedirection();
-app.UseAuthentication();
-app.UseAuthorization();
-app.MapControllers();
-
-app.Run();
+      # ───── SSH into EC2 and Deploy ─────
+      - name: SSH and deploy to EC2
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ vars.EC2_HOST }}
+          username: ${{ vars.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
+            cd /var/www/loginapi
+            dotnet LoginApi.dll
+            sudo systemctl restart kestrel-loginapi.service || true
