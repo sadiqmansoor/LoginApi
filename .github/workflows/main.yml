@@ -62,11 +62,17 @@ jobs:
             export DOTNET_ROOT=$HOME/.dotnet
             export PATH=$PATH:$DOTNET_ROOT:$DOTNET_ROOT/tools
 
-
             # ───── Prepare Deployment Directory ─────
             sudo mkdir -p /var/www/loginapi
             sudo unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
             sudo chown -R www-data:www-data /var/www/loginapi
+
+            # ───── Set .NET Environment Variables ─────
+            echo 'export DOTNET_ROOT=$HOME/.dotnet' >> ~/.bashrc
+            echo 'export PATH=$PATH:$DOTNET_ROOT:$DOTNET_ROOT/tools' >> ~/.bashrc
+            source ~/.bashrc
+            Environment=DOTNET_ROOT=/home/ubuntu/.dotnet
+            Environment=PATH=/home/ubuntu/.dotnet:/home/ubuntu/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
             # ───── Validate DLL Exists ─────
             if [ ! -f /var/www/loginapi/LoginApi.dll ]; then
@@ -87,12 +93,12 @@ jobs:
             [Service]
              WorkingDirectory=/var/www/loginapi
              ExecStart=/home/ubuntu/.dotnet/dotnet /var/www/loginapi/LoginApi.dll
-            Restart=always
-            RestartSec=10
-            KillSignal=SIGINT
-            SyslogIdentifier=loginapi
-            User=www-data
-            Environment=ASPNETCORE_ENVIRONMENT=Production
+             Restart=always
+             RestartSec=10
+             KillSignal=SIGINT
+             SyslogIdentifier=loginapi
+             User=www-data
+             Environment=ASPNETCORE_ENVIRONMENT=Production
 
             [Install] 
              WantedBy=multi-user.target
