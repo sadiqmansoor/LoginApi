@@ -54,12 +54,14 @@ jobs:
             sudo -u postgres psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'loginuser') THEN CREATE ROLE loginuser LOGIN PASSWORD 'securepassword'; END IF; END \$\$;"
             sudo -u postgres psql -c "CREATE DATABASE logindb OWNER loginuser;"
             
+                       
             # ───── Install .NET Runtime ─────
             wget https://dot.net/v1/dotnet-install.sh
             chmod +x dotnet-install.sh
             ./dotnet-install.sh --channel 8.0 --runtime aspnetcore
             export DOTNET_ROOT=$HOME/.dotnet
             export PATH=$PATH:$DOTNET_ROOT:$DOTNET_ROOT/tools
+
 
             # ───── Prepare Deployment Directory ─────
             sudo mkdir -p /var/www/loginapi
@@ -69,9 +71,13 @@ jobs:
             # ───── Validate DLL Exists ─────
             if [ ! -f /var/www/loginapi/LoginApi.dll ]; then
               echo "❌ LoginApi.dll not found after unzip. Deployment aborted."
-              exit 1
+              exit 1 
             fi
 
+            # ───── Apply EF Core Migrations ─────
+            cd /var/www/loginapi
+            /home/ubuntu/.dotnet/dotnet LoginApi.dll --migrate
+            
             # ───── Create systemd service ─────
             sudo tee /etc/systemd/system/kestrel-loginapi.service > /dev/null << 'EOF'
              [Unit]
