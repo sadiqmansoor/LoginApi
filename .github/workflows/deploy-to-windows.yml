@@ -42,12 +42,12 @@ jobs:
           host: ${{ vars.EC2_HOST_WINDOWS }}
           username: ${{ vars.EC2_USER_WINDOWS }}
           key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
-          source: "loginapi.zip"
-          # Use Unix-style paths for the target directory
-          target: "/c/inetpub/wwwroot/LoginApi"
-          # Enables symlink following for tar
-          tar_dereference: true
-      
+          source: loginapi.zip
+          target: C:\\Users\\Administrator\\Desktop
+          # Note: The target path is a Windows path.
+          # The appleboy/scp-action might handle this correctly, but if not,
+          # a Powershell script will be needed in a later step to copy the file.
+
       # ───── SSH into EC2 and Deploy ─────
       - name: SSH and deploy to EC2
         uses: appleboy/ssh-action@v0.1.10
