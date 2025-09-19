@@ -6,7 +6,7 @@ on:
 
 jobs:
   deploy-loginapi-windows:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest  # ✅ Linux runner required for SCP/SSH actions
 
     steps:
       # ───── Checkout Code ─────
@@ -33,9 +33,9 @@ jobs:
 
       # ───── Zip Published Output ─────
       - name: Zip published output
-        run: Compress-Archive -Path publish\* -DestinationPath loginapi.zip
+        run: zip -r loginapi.zip publish
 
-      # ───── Upload to EC2 ─────
+      # ───── Upload to Windows EC2 ─────
       - name: Upload zip to EC2
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -43,10 +43,7 @@ jobs:
           username: ${{ vars.EC2_USER_WINDOWS }}
           key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
           source: loginapi.zip
-          target: C:/Users/Administrator/Desktop
-          # Note: The target path is a Windows path.
-          # The appleboy/scp-action might handle this correctly, but if not,
-          # a Powershell script will be needed in a later step to copy the file.
+          target: /Users/Administrator/deploy  # ✅ Use Unix-style path for SCP
 
       # ───── SSH into EC2 and Deploy ─────
       - name: SSH and deploy to EC2
@@ -57,31 +54,32 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
           script_type: powershell
           script: |
-            # ───── Install PostgreSQL (if not present) ─────
+            # ───── PostgreSQL Setup ─────
             $pg_installer = "postgresql-16.1-1-windows-x64.exe"
             $pg_path = "C:\Program Files\PostgreSQL\16\bin\psql.exe"
             if (-not (Test-Path -Path $pg_path)) {
-                Write-Host "PostgreSQL not found. Installing..."
-                Invoke-WebRequest -Uri "https://www.postgresql.org/media/frs/download.php?file=postgresql-16.1-1-windows-x64.exe" -OutFile $pg_installer
-                Start-Process -FilePath $pg_installer -ArgumentList "/S /NOCREATECLUSTER /NOCREATESERVICE /SERVICEACCOUNT=NT AUTHORITY\NetworkService /SERVICEPASSWORD= /INSTALLDIR=`"C:\\Program Files\\PostgreSQL\\16`"" -Wait
+              Write-Host "PostgreSQL not found. Installing..."
+              Invoke-WebRequest -Uri "https://www.postgresql.org/media/frs/download.php?file=postgresql-16.1-1-windows-x64.exe" -OutFile $pg_installer
+              Start-Process -FilePath $pg_installer -ArgumentList "/S /NOCREATECLUSTER /NOCREATESERVICE /SERVICEACCOUNT=NT AUTHORITY\NetworkService /SERVICEPASSWORD= /INSTALLDIR=`"C:\Program Files\PostgreSQL\16`"" -Wait
             }
 
-            # ───── Create PostgreSQL User & DB (if needed) ─────
-            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "CREATE USER loginuser WITH PASSWORD 'securepassword';" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
-            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "CREATE DATABASE logindb OWNER loginuser;" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
+            # ───── Create DB and User ─────
+            & "$pg_path" -c "CREATE USER loginuser WITH PASSWORD 'securepassword';" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
+            & "$pg_path" -c "CREATE DATABASE logindb OWNER loginuser;" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
 
-            # ───── Stop Application Pool ─────
+            # ───── Stop IIS App Pool ─────
             Import-Module WebAdministration
             Stop-WebAppPool -Name "LoginApi" -ErrorAction SilentlyContinue
 
             # ───── Unzip and Deploy ─────
-            Expand-Archive -Path "C:\inetpub\wwwroot\LoginApi\loginapi.zip" -DestinationPath "C:\inetpub\wwwroot\LoginApi" -Force
-            Remove-Item -Path "C:\inetpub\wwwroot\LoginApi\loginapi.zip"
+            Expand-Archive -Path "C:\Users\Administrator\deploy\loginapi.zip" -DestinationPath "C:\inetpub\wwwroot\LoginApi" -Force
+            Remove-Item -Path "C:\Users\Administrator\deploy\loginapi.zip"
 
             # ───── Apply EF Core Migrations ─────
             cd C:\inetpub\wwwroot\LoginApi
             dotnet tool install --global dotnet-ef --no-restore
+            $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
             dotnet ef database update --project LoginApi.csproj
 
-            # ───── Start Application Pool ─────
+            # ───── Start IIS App Pool ─────
             Start-WebAppPool -Name "LoginApi"
