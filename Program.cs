@@ -9,6 +9,15 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
+if (args.Contains("--migrate"))
+{
+    using var scope = Host.CreateApplicationBuilder(args).Build().Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.Migrate();
+    Console.WriteLine("✅ EF Core migrations applied.");
+    return;
+}
+
 // ───── Configure Kestrel ─────
 builder.WebHost.ConfigureKestrel(serverOptions =>
 {
