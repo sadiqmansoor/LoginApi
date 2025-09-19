@@ -1,0 +1,71 @@
+name: CI/CD for LoginApi to Windows EC2
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy-loginapi-windows:
+    runs-on: windows-latest
+
+    steps:
+      # ───── Checkout Code ─────
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # ───── Setup .NET SDK ─────
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      # ───── Restore Packages ─────
+      - name: Restore packages
+        run: dotnet restore LoginApi.csproj
+
+      # ───── Build Project ─────
+      - name: Build project
+        run: dotnet build LoginApi.csproj --configuration Release
+
+      # ───── Publish Project ─────
+      - name: Publish project
+        run: dotnet publish LoginApi.csproj -c Release -o ./publish
+
+      # ───── Zip Published Output ─────
+      - name: Zip published output
+        run: Compress-Archive -Path publish\* -DestinationPath loginapi.zip
+
+      # ───── Upload to EC2 ─────
+      - name: Upload zip to EC2
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ vars.EC2_HOST_WINDOWS }}
+          username: ${{ vars.EC2_USER_WINDOWS }}
+          key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
+          source: "loginapi.zip"
+          target: "C:\\inetpub\\wwwroot\\LoginApi"
+
+      # ───── SSH into EC2 and Deploy ─────
+      - name: SSH and deploy to EC2
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ vars.EC2_HOST_WINDOWS }}
+          username: ${{ vars.EC2_USER_WINDOWS }}
+          key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
+          script_type: powershell
+          script: |
+            # ───── Stop Application Pool ─────
+            Import-Module WebAdministration
+            Stop-WebAppPool -Name "LoginApi" -ErrorAction SilentlyContinue
+
+            # ───── Unzip and Deploy ─────
+            Expand-Archive -Path "C:\\inetpub\\wwwroot\\LoginApi\\loginapi.zip" -DestinationPath "C:\\inetpub\\wwwroot\\LoginApi" -Force
+            Remove-Item -Path "C:\\inetpub\\wwwroot\\LoginApi\\loginapi.zip"
+
+            # ───── Apply EF Core Migrations ─────
+            cd C:\\inetpub\\wwwroot\\LoginApi
+            dotnet tool install --global dotnet-ef --no-restore
+            dotnet ef database update --project LoginApi.csproj
+
+            # ───── Start Application Pool ─────
+            Start-WebAppPool -Name "LoginApi"
