@@ -27,7 +27,7 @@ jobs:
         run: dotnet publish LoginApi.csproj -c Release -o ./publish
 
       - name: Zip published output
-        run: cd publish && zip -r ../loginapi.zip .
+        run: zip -j -r loginapi.zip ./publish/
 
       - name: Upload zip to EC2
         uses: appleboy/scp-action@v0.1.4
@@ -45,66 +45,67 @@ jobs:
           username: ${{ vars.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            # ───── Install .NET Runtime if Missing ─────
+            if ! command -v dotnet &> /dev/null; then
+              sudo apt-get update
+              sudo apt-get install -y dotnet-sdk-8.0
+              export PATH=$PATH:/usr/bin/dotnet
+            fi
 
             # ───── Install PostgreSQL ─────
             sudo apt-get update
             sudo apt-get install -y postgresql postgresql-contrib
             sudo systemctl enable postgresql
             sudo systemctl start postgresql
+
+            # ───── Create PostgreSQL User & DB (if needed) ─────
             sudo -u postgres psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'loginuser') THEN CREATE ROLE loginuser LOGIN PASSWORD 'securepassword'; END IF; END \$\$;"
-            sudo -u postgres psql -c "CREATE DATABASE logindb OWNER loginuser;"
-            
-                       
-            # ───── Install .NET Runtime ─────
-            wget https://dot.net/v1/dotnet-install.sh
-            chmod +x dotnet-install.sh
-            ./dotnet-install.sh --channel 8.0 --runtime aspnetcore
-            export DOTNET_ROOT=$HOME/.dotnet
-            export PATH=$PATH:$DOTNET_ROOT:$DOTNET_ROOT/tools
+            DB_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='logindb'")
+            if [ "$DB_EXISTS" != "1" ]; then
+              sudo -u postgres createdb -O loginuser logindb
+            fi
 
             # ───── Prepare Deployment Directory ─────
             sudo mkdir -p /var/www/loginapi
             sudo unzip -o /home/${{ vars.EC2_USER }}/deploy/loginapi.zip -d /var/www/loginapi
             sudo chown -R www-data:www-data /var/www/loginapi
 
-            # ───── Set .NET Environment Variables ─────
-            echo 'export DOTNET_ROOT=$HOME/.dotnet' >> ~/.bashrc
-            echo 'export PATH=$PATH:$DOTNET_ROOT:$DOTNET_ROOT/tools' >> ~/.bashrc
-            source ~/.bashrc
-            Environment=DOTNET_ROOT=/home/ubuntu/.dotnet
-            Environment=PATH=/home/ubuntu/.dotnet:/home/ubuntu/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
             # ───── Validate DLL Exists ─────
             if [ ! -f /var/www/loginapi/LoginApi.dll ]; then
               echo "❌ LoginApi.dll not found after unzip. Deployment aborted."
-              exit 1 
+              exit 1
             fi
 
             # ───── Apply EF Core Migrations ─────
             cd /var/www/loginapi
-            /home/ubuntu/.dotnet/dotnet LoginApi.dll --migrate
-            
-            # ───── Create systemd service ─────
-            sudo tee /etc/systemd/system/kestrel-loginapi.service > /dev/null << 'EOF'
-             [Unit]
-             Description=LoginApi .NET Web App
-             After=network.target
+            sudo dotnet tool install --global dotnet-ef
+            sudo dotnet-ef database update --project LoginApi.csproj
 
-            [Service]
-             WorkingDirectory=/var/www/loginapi
-             ExecStart=/home/ubuntu/.dotnet/dotnet /var/www/loginapi/LoginApi.dll
-             Restart=always
-             RestartSec=10
-             KillSignal=SIGINT
-             SyslogIdentifier=loginapi
-             User=www-data
+            # ───── Create systemd service ─────
+            SERVICE_PATH="/etc/systemd/system/kestrel-loginapi.service"
+            if [ ! -f "$SERVICE_PATH" ]; then
+              sudo tee "$SERVICE_PATH" > /dev/null << 'EOF'
+             
+             [Unit]
+              Description=LoginApi .NET Web App
+              After=network.target
+
+             [Service]
+              WorkingDirectory=/var/www/loginapi
+              ExecStart=/usr/bin/dotnet /var/www/loginapi/LoginApi.dll
+              Restart=always
+              RestartSec=10
+              KillSignal=SIGINT
+              SyslogIdentifier=loginapi
+              User=www-data
              Environment=ASPNETCORE_ENVIRONMENT=Production
 
-            [Install] 
-             WantedBy=multi-user.target
-             EOF
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+              sudo systemctl daemon-reload
+              sudo systemctl enable kestrel-loginapi.service
+            fi
 
-            # ───── Reload and Start Service ─────
-            sudo systemctl daemon-reload
-            sudo systemctl enable kestrel-loginapi.service
+            # ───── Restart the Service ─────
             sudo systemctl restart kestrel-loginapi.service
