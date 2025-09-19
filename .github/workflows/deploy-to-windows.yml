@@ -43,7 +43,7 @@ jobs:
           username: ${{ vars.EC2_USER_WINDOWS }}
           key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
           source: loginapi.zip
-          target: C:\\Users\\Administrator\\Desktop
+          target: C:/Users/Administrator/Desktop
           # Note: The target path is a Windows path.
           # The appleboy/scp-action might handle this correctly, but if not,
           # a Powershell script will be needed in a later step to copy the file.
