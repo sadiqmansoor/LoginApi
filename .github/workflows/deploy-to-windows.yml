@@ -54,16 +54,29 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
           script_type: powershell
           script: |
+            # ───── Install PostgreSQL (if not present) ─────
+            $pg_installer = "postgresql-16.1-1-windows-x64.exe"
+            $pg_path = "C:\Program Files\PostgreSQL\16\bin\psql.exe"
+            if (-not (Test-Path -Path $pg_path)) {
+                Write-Host "PostgreSQL not found. Installing..."
+                Invoke-WebRequest -Uri "https://www.postgresql.org/media/frs/download.php?file=postgresql-16.1-1-windows-x64.exe" -OutFile $pg_installer
+                Start-Process -FilePath $pg_installer -ArgumentList "/S /NOCREATECLUSTER /NOCREATESERVICE /SERVICEACCOUNT=NT AUTHORITY\NetworkService /SERVICEPASSWORD= /INSTALLDIR=`"C:\\Program Files\\PostgreSQL\\16`"" -Wait
+            }
+
+            # ───── Create PostgreSQL User & DB (if needed) ─────
+            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "CREATE USER loginuser WITH PASSWORD 'securepassword';" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
+            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "CREATE DATABASE logindb OWNER loginuser;" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
+
             # ───── Stop Application Pool ─────
             Import-Module WebAdministration
             Stop-WebAppPool -Name "LoginApi" -ErrorAction SilentlyContinue
 
             # ───── Unzip and Deploy ─────
-            Expand-Archive -Path "C:\\inetpub\\wwwroot\\LoginApi\\loginapi.zip" -DestinationPath "C:\\inetpub\\wwwroot\\LoginApi" -Force
-            Remove-Item -Path "C:\\inetpub\\wwwroot\\LoginApi\\loginapi.zip"
+            Expand-Archive -Path "C:\inetpub\wwwroot\LoginApi\loginapi.zip" -DestinationPath "C:\inetpub\wwwroot\LoginApi" -Force
+            Remove-Item -Path "C:\inetpub\wwwroot\LoginApi\loginapi.zip"
 
             # ───── Apply EF Core Migrations ─────
-            cd C:\\inetpub\\wwwroot\\LoginApi
+            cd C:\inetpub\wwwroot\LoginApi
             dotnet tool install --global dotnet-ef --no-restore
             dotnet ef database update --project LoginApi.csproj
 
