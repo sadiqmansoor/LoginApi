@@ -33,7 +33,7 @@ jobs:
 
       # ───── Create and Upload the Artifact ─────
       - name: Create and upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: loginapi-publish
           path: ./publish
