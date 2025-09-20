@@ -6,7 +6,7 @@ on:
 
 jobs:
   deploy-loginapi-windows:
-    runs-on: ubuntu-latest  # ✅ Linux runner required for SCP/SSH actions
+    runs-on: windows-latest
 
     steps:
       # ───── Checkout Code ─────
@@ -31,21 +31,14 @@ jobs:
       - name: Publish project
         run: dotnet publish LoginApi.csproj -c Release -o ./publish
 
-      # ───── Zip Published Output ─────
-      - name: Zip published output
-        run: zip -r loginapi.zip publish
-
-      # ───── Upload to Windows EC2 ─────
-      - name: Upload zip to EC2
-        uses: appleboy/scp-action@v0.1.4
+      # ───── Create and Upload the Artifact ─────
+      - name: Create and upload artifact
+        uses: actions/upload-artifact@v3
         with:
-          host: ${{ vars.EC2_HOST_WINDOWS }}
-          username: ${{ vars.EC2_USER_WINDOWS }}
-          key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
-          source: loginapi.zip
-          target: /Users/Administrator/deploy  # ✅ Use Unix-style path for SCP
+          name: loginapi-publish
+          path: ./publish
 
-      # ───── SSH into EC2 and Deploy ─────
+      # ───── SSH and deploy to EC2 ─────
       - name: SSH and deploy to EC2
         uses: appleboy/ssh-action@v0.1.10
         with:
@@ -54,32 +47,65 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
           script_type: powershell
           script: |
-            # ───── PostgreSQL Setup ─────
+            # Set up the deployment path on the server
+            $deployPath = "C:\\inetpub\\wwwroot\\LoginApi"
+            if (-not (Test-Path -Path $deployPath)) {
+                New-Item -Path $deployPath -ItemType Directory
+            }
+
+            # ───── Download the build artifact from GitHub ─────
+            $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
+            $runId = "${{ github.run_id }}"
+            $repo = "${{ github.repository }}"
+            
+            $downloadUrl = "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts"
+            
+            $headers = @{
+                "Authorization" = "token $env:GITHUB_TOKEN"
+                "Accept" = "application/vnd.github.v3+json"
+            }
+            
+            $artifacts = Invoke-RestMethod -Uri $downloadUrl -Headers $headers
+            
+            $artifactName = "loginapi-publish"
+            $artifact = $artifacts.artifacts | Where-Object { $_.name -eq $artifactName }
+            
+            if ($null -ne $artifact) {
+                $download = $artifact.archive_download_url
+                Write-Host "Downloading artifact from: $download"
+                
+                # Download the artifact and save it
+                Invoke-WebRequest -Uri $download -Headers $headers -OutFile "$deployPath\loginapi.zip"
+            } else {
+                Write-Host "Artifact '$artifactName' not found."
+                exit 1
+            }
+
+            # ───── Unzip and Deploy ─────
+            Expand-Archive -Path "$deployPath\loginapi.zip" -DestinationPath $deployPath -Force
+            Remove-Item -Path "$deployPath\loginapi.zip"
+
+            # ───── Install PostgreSQL (if not present) ─────
             $pg_installer = "postgresql-16.1-1-windows-x64.exe"
             $pg_path = "C:\Program Files\PostgreSQL\16\bin\psql.exe"
             if (-not (Test-Path -Path $pg_path)) {
-              Write-Host "PostgreSQL not found. Installing..."
-              Invoke-WebRequest -Uri "https://www.postgresql.org/media/frs/download.php?file=postgresql-16.1-1-windows-x64.exe" -OutFile $pg_installer
-              Start-Process -FilePath $pg_installer -ArgumentList "/S /NOCREATECLUSTER /NOCREATESERVICE /SERVICEACCOUNT=NT AUTHORITY\NetworkService /SERVICEPASSWORD= /INSTALLDIR=`"C:\Program Files\PostgreSQL\16`"" -Wait
+                Write-Host "PostgreSQL not found. Installing..."
+                Invoke-WebRequest -Uri "https://www.postgresql.org/media/frs/download.php?file=postgresql-16.1-1-windows-x64.exe" -OutFile $pg_installer
+                Start-Process -FilePath $pg_installer -ArgumentList "/S /NOCREATECLUSTER /NOCREATESERVICE /SERVICEACCOUNT=NT AUTHORITY\NetworkService /SERVICEPASSWORD= /INSTALLDIR=`"C:\\Program Files\\PostgreSQL\\16`"" -Wait
             }
 
-            # ───── Create DB and User ─────
-            & "$pg_path" -c "CREATE USER loginuser WITH PASSWORD 'securepassword';" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
-            & "$pg_path" -c "CREATE DATABASE logindb OWNER loginuser;" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
+            # ───── Create PostgreSQL User & DB (if needed) ─────
+            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "CREATE USER loginuser WITH PASSWORD 'securepassword';" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
+            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "CREATE DATABASE logindb OWNER loginuser;" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
 
-            # ───── Stop IIS App Pool ─────
+            # ───── Stop Application Pool ─────
             Import-Module WebAdministration
             Stop-WebAppPool -Name "LoginApi" -ErrorAction SilentlyContinue
-
-            # ───── Unzip and Deploy ─────
-            Expand-Archive -Path "C:\Users\Administrator\deploy\loginapi.zip" -DestinationPath "C:\inetpub\wwwroot\LoginApi" -Force
-            Remove-Item -Path "C:\Users\Administrator\deploy\loginapi.zip"
 
             # ───── Apply EF Core Migrations ─────
             cd C:\inetpub\wwwroot\LoginApi
             dotnet tool install --global dotnet-ef --no-restore
-            $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
             dotnet ef database update --project LoginApi.csproj
 
-            # ───── Start IIS App Pool ─────
+            # ───── Start Application Pool ─────
             Start-WebAppPool -Name "LoginApi"
