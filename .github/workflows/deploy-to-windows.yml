@@ -1,13 +1,10 @@
 name: CI/CD for LoginApi to Windows EC2
-
 on:
   push:
     branches: [ main ]
-
 jobs:
   deploy-loginapi-windows:
     runs-on: windows-latest
-
     steps:
       # ───── Checkout Code ─────
       - name: Checkout repository
@@ -41,71 +38,73 @@ jobs:
       # ───── SSH and deploy to EC2 ─────
       - name: SSH and deploy to EC2
         uses: appleboy/ssh-action@v1.2.0
+        shell: pwsh
         with:
           host: ${{ vars.EC2_HOST_WINDOWS }}
           username: ${{ vars.EC2_USER_WINDOWS }}
           key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
-          script_type: powershell
           script: |
             # Set up the deployment path on the server
-            $deployPath = "C:\\inetpub\\wwwroot\\LoginApi"
+            $deployPath = "C:\inetpub\wwwroot\LoginApi"
             if (-not (Test-Path -Path $deployPath)) {
-                New-Item -Path $deployPath -ItemType Directory
+                New-Item -Path $deployPath -ItemType Directory -Force
             }
 
-            # ───── Download the build artifact from GitHub ─────
+            # Download the build artifact from GitHub Actions artifacts API
             $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
             $runId = "${{ github.run_id }}"
             $repo = "${{ github.repository }}"
-            
+
             $downloadUrl = "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts"
-            
             $headers = @{
                 "Authorization" = "token $env:GITHUB_TOKEN"
                 "Accept" = "application/vnd.github.v3+json"
             }
-            
+
             $artifacts = Invoke-RestMethod -Uri $downloadUrl -Headers $headers
-            
             $artifactName = "loginapi-publish"
             $artifact = $artifacts.artifacts | Where-Object { $_.name -eq $artifactName }
-            
+
             if ($null -ne $artifact) {
                 $download = $artifact.archive_download_url
                 Write-Host "Downloading artifact from: $download"
-                
-                # Download the artifact and save it
                 Invoke-WebRequest -Uri $download -Headers $headers -OutFile "$deployPath\loginapi.zip"
             } else {
                 Write-Host "Artifact '$artifactName' not found."
                 exit 1
             }
 
-            # ───── Unzip and Deploy ─────
+            # Unzip and cleanup
             Expand-Archive -Path "$deployPath\loginapi.zip" -DestinationPath $deployPath -Force
             Remove-Item -Path "$deployPath\loginapi.zip"
 
-            # ───── Install PostgreSQL (if not present) ─────
+            # Install PostgreSQL if missing
             $pg_installer = "postgresql-16.1-1-windows-x64.exe"
             $pg_path = "C:\Program Files\PostgreSQL\16\bin\psql.exe"
             if (-not (Test-Path -Path $pg_path)) {
                 Write-Host "PostgreSQL not found. Installing..."
-                Invoke-WebRequest -Uri "https://www.postgresql.org/media/frs/download.php?file=postgresql-16.1-1-windows-x64.exe" -OutFile $pg_installer
-                Start-Process -FilePath $pg_installer -ArgumentList "/S /NOCREATECLUSTER /NOCREATESERVICE /SERVICEACCOUNT=NT AUTHORITY\NetworkService /SERVICEPASSWORD= /INSTALLDIR=`"C:\\Program Files\\PostgreSQL\\16`"" -Wait
+                Invoke-WebRequest -Uri "https://get.enterprisedb.com/postgresql/$pg_installer" -OutFile $pg_installer
+                Start-Process -FilePath $pg_installer -ArgumentList "/S /NOCREATECLUSTER /NOCREATESERVICE /SERVICEACCOUNT=`"NT AUTHORITY\NetworkService`" /SERVICEPASSWORD= /INSTALLDIR=`"C:\Program Files\PostgreSQL\16`"" -Wait
             }
 
-            # ───── Create PostgreSQL User & DB (if needed) ─────
-            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "CREATE USER loginuser WITH PASSWORD 'securepassword';" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
-            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "CREATE DATABASE logindb OWNER loginuser;" -d "template1" -U "postgres" -ErrorAction SilentlyContinue
+            # Create PostgreSQL user and database if not exist, suppress errors if already exist
+            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname='loginuser') THEN CREATE USER loginuser WITH PASSWORD 'securepassword'; END IF; END \$\$;" -d "template1" -U "postgres"
+            & "C:\Program Files\PostgreSQL\16\bin\psql.exe" -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_database WHERE datname='logindb') THEN CREATE DATABASE logindb OWNER loginuser; END IF; END \$\$;" -d "template1" -U "postgres"
 
-            # ───── Stop Application Pool ─────
+            # Stop Application Pool
             Import-Module WebAdministration
-            Stop-WebAppPool -Name "LoginApi" -ErrorAction SilentlyContinue
+            if (Get-WebAppPoolState -Name "LoginApi") {
+              Stop-WebAppPool -Name "LoginApi"
+            }
 
-            # ───── Apply EF Core Migrations ─────
-            cd C:\inetpub\wwwroot\LoginApi
+            # Apply EF Core Migrations
+            cd $deployPath
+            dotnet tool uninstall --global dotnet-ef -ErrorAction SilentlyContinue
             dotnet tool install --global dotnet-ef --no-restore
+            $env:PATH += ";" + $HOME + "\.dotnet\tools"
             dotnet ef database update --project LoginApi.csproj
 
-            # ───── Start Application Pool ─────
+            # Start Application Pool
             Start-WebAppPool -Name "LoginApi"
+
+            Write-Host "Deployment to Windows EC2 completed successfully."
