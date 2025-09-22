@@ -73,28 +73,22 @@ jobs:
             Write-Host "Artifact '$artifactName' not found."
             exit 1
           }
-
-          # Unzip artifact
           Expand-Archive -Path "$using:deployPath\\loginapi.zip" -DestinationPath $using:deployPath -Force
           Remove-Item -Path "$using:deployPath\\loginapi.zip"
-
-          # PostgreSQL installation
           $pgInstaller = "postgresql-16.1-1-windows-x64.exe"
           $pgPath = "C:\\Program Files\\PostgreSQL\\16\\bin\\psql.exe"
           if (-not (Test-Path -Path $pgPath)) {
             Invoke-WebRequest -Uri "https://get.enterprisedb.com/postgresql/$pgInstaller" -OutFile $pgInstaller
             Start-Process -FilePath $pgInstaller -ArgumentList "/S /NOCREATECLUSTER /NOCREATESERVICE /SERVICEACCOUNT=`"NT AUTHORITY\\NetworkService`" /SERVICEPASSWORD= /INSTALLDIR=`"C:\\Program Files\\PostgreSQL\\16`"" -Wait
           }
-          # Create DB user and database, ignoring errors if exist
+          
           & "$pgPath" -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname='loginuser') THEN CREATE USER loginuser WITH PASSWORD 'securepassword'; END IF; END \$\$;" -d "template1" -U "postgres"
           & "$pgPath" -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_database WHERE datname='logindb') THEN CREATE DATABASE logindb OWNER loginuser; END IF; END \$\$;" -d "template1" -U "postgres"
 
-          # IIS App Pool stop
           Import-Module WebAdministration
           if (Get-WebAppPoolState -Name 'LoginApi' -ErrorAction SilentlyContinue) {
             Stop-WebAppPool -Name 'LoginApi'
           }
 
-          # Run EF Core migrations
           cd $using:deployPath
           dotnet tool uninstall --global dotnet-ef -Error
