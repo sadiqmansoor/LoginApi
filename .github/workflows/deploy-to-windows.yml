@@ -1,7 +1,7 @@
 name: CI/CD for LoginApi to Windows EC2
 on:
-  push:
-    branches: [ main ]
+   push:
+     branches: [ main ]
 jobs:
   deploy-loginapi-windows:
     runs-on: windows-latest
