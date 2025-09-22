@@ -53,14 +53,10 @@ jobs:
            $deployPath = "C:\\inetpub\\wwwroot\\LoginApi"
 
            Invoke-Command -ComputerName $ec2Host -Credential (New-Object System.Management.Automation.PSCredential($ec2User, (ConvertTo-SecureString ${{ secrets.EC2_PASSWORD_WINDOWS }} -AsPlainText -Force))) -ScriptBlock { Invoke-Expression $using:psScript }
-
            ssh -o StrictHostKeyChecking=no $ec2User@$ec2Host powershell -Command $psScript
-
-
-          # Download artifact zip using GitHub API
-          $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
-          $runId = "${{ github.run_id }}"
-          $repo = "${{ github.repository }}"
+           $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
+           $runId = "${{ github.run_id }}"
+           $repo = "${{ github.repository }}"
 
           $downloadUrl = "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts"
           $headers = @{
