@@ -54,19 +54,20 @@ jobs:
           $deployPath = "C:\inetpub\wwwroot\LoginApi"
 
           # Define the entire deployment PowerShell script as a here-string
+          
           $psScript = @'
-            # Create deployment directory if it does not exist
-            if (-not (Test-Path -Path $using:deployPath)) {
-              New-Item -ItemType Directory -Path $using:deployPath -Force
-              Write-Host "Created deployment directory at $using:deployPath"
-            } else {
-              Write-Host "Deployment directory exists at $using:deployPath"
-            }
-            '@
-            # Download artifact from GitHub Actions using GitHub API and GITHUB_TOKEN
-            $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
-            $runId = "${{ github.run_id }}"
-            $repo = "${{ github.repository }}"
+
+              if (-not (Test-Path -Path $using:deployPath)) {
+                New-Item -ItemType Directory -Path $using:deployPath -Force
+                Write-Host "Created deployment directory."
+              } else {
+               Write-Host "Deployment directory exists."
+              }
+'@
+
+               $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
+               $runId = "${{ github.run_id }}"
+               $repo = "${{ github.repository }}"
 
             $url = "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts"
             $headers = @{
