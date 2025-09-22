@@ -1,94 +1,102 @@
 name: CI/CD for LoginApi to Windows EC2
 on:
-   push:
-     branches: [ main ]
+  push:
+    branches: [ main ]
+
 jobs:
   deploy-loginapi-windows:
     runs-on: windows-latest
     steps:
-      # ───── Checkout Code ─────
+      # Checkout source code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # ───── Setup .NET SDK ─────
+      # Setup .NET SDK 8.x
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
-      # ───── Restore Packages ─────
+      # Restore dependencies with PowerShell shell
       - name: Restore packages
         run: dotnet restore LoginApi.csproj
         shell: pwsh
 
-      # ───── Build Project ─────
+      # Build project
       - name: Build project
         run: dotnet build LoginApi.csproj --configuration Release
         shell: pwsh
 
-      # ───── Publish Project ─────
+      # Publish project
       - name: Publish project
         run: dotnet publish LoginApi.csproj -c Release -o ./publish
         shell: pwsh
 
-      # ───── Upload artifacts ─────
+      # Upload published output as artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: loginapi-publish
           path: ./publish
 
-      # ───── Setup SSH agent ─────
+      # Set up the SSH Authentication agent to use private key
       - name: Setup SSH Agent
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
 
-      # ───── Deploy via ssh with PowerShell script ─────
+      # Run deployment PowerShell script remotely on Windows EC2 via SSH
       - name: Deploy to Windows EC2
         shell: pwsh
-           run:|
-           $ec2User = "${{ vars.EC2_USER_WINDOWS }}"
-           $ec2Host = "${{ vars.EC2_HOST_WINDOWS }}"
-           $deployPath = "C:\\inetpub\\wwwroot\\LoginApi"
+        run: |
+          $ec2User = "${{ vars.EC2_USER_WINDOWS }}"
+          $ec2Host = "${{ vars.EC2_HOST_WINDOWS }}"
+          $deployPath = "C:\inetpub\wwwroot\LoginApi"
 
-           Invoke-Command -ComputerName $ec2Host -Credential (New-Object System.Management.Automation.PSCredential($ec2User, (ConvertTo-SecureString ${{ secrets.EC2_PASSWORD_WINDOWS }} -AsPlainText -Force))) -ScriptBlock { Invoke-Expression $using:psScript }
-           ssh -o StrictHostKeyChecking=no $ec2User@$ec2Host powershell -Command $psScript
-           $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
-           $runId = "${{ github.run_id }}"
-           $repo = "${{ github.repository }}"
+          # Define the entire deployment PowerShell script as a here-string
+          $psScript = @'
+            # Create deployment directory if it does not exist
+            if (-not (Test-Path -Path $using:deployPath)) {
+              New-Item -ItemType Directory -Path $using:deployPath -Force
+              Write-Host "Created deployment directory at $using:deployPath"
+            } else {
+              Write-Host "Deployment directory exists at $using:deployPath"
+            }
 
-          $downloadUrl = "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts"
-          $headers = @{
-            "Authorization" = "token $env:GITHUB_TOKEN"
-            "Accept" = "application/vnd.github.v3+json"
-          }
-          $artifacts = Invoke-RestMethod -Uri $downloadUrl -Headers $headers
-          $artifactName = "loginapi-publish"
-          $artifact = $artifacts.artifacts | Where-Object { $_.name -eq $artifactName }
-          if ($null -ne $artifact) {
-            $download = $artifact.archive_download_url
-            Invoke-WebRequest -Uri $download -Headers $headers -OutFile "$using:deployPath\\loginapi.zip"
-          } else {
-            Write-Host "Artifact '$artifactName' not found."
-            exit 1
-          }
-          Expand-Archive -Path "$using:deployPath\\loginapi.zip" -DestinationPath $using:deployPath -Force
-          Remove-Item -Path "$using:deployPath\\loginapi.zip"
-          $pgInstaller = "postgresql-16.1-1-windows-x64.exe"
-          $pgPath = "C:\\Program Files\\PostgreSQL\\16\\bin\\psql.exe"
-          if (-not (Test-Path -Path $pgPath)) {
-            Invoke-WebRequest -Uri "https://get.enterprisedb.com/postgresql/$pgInstaller" -OutFile $pgInstaller
-            Start-Process -FilePath $pgInstaller -ArgumentList "/S /NOCREATECLUSTER /NOCREATESERVICE /SERVICEACCOUNT=`"NT AUTHORITY\\NetworkService`" /SERVICEPASSWORD= /INSTALLDIR=`"C:\\Program Files\\PostgreSQL\\16`"" -Wait
-          }
-          
-          & "$pgPath" -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname='loginuser') THEN CREATE USER loginuser WITH PASSWORD 'securepassword'; END IF; END \$\$;" -d "template1" -U "postgres"
-          & "$pgPath" -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_database WHERE datname='logindb') THEN CREATE DATABASE logindb OWNER loginuser; END IF; END \$\$;" -d "template1" -U "postgres"
+            # Download artifact from GitHub Actions using GitHub API and GITHUB_TOKEN
+            $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
+            $runId = "${{ github.run_id }}"
+            $repo = "${{ github.repository }}"
 
-          Import-Module WebAdministration
-          if (Get-WebAppPoolState -Name 'LoginApi' -ErrorAction SilentlyContinue) {
-            Stop-WebAppPool -Name 'LoginApi'
-          }
+            $url = "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts"
+            $headers = @{
+              "Authorization" = "token $env:GITHUB_TOKEN"
+              "Accept" = "application/vnd.github.v3+json"
+            }
 
-          cd $using:deployPath
-          dotnet tool uninstall --global dotnet-ef -Error
+            $response = Invoke-RestMethod -Uri $url -Headers $headers
+            $artifactName = "loginapi-publish"
+            $artifact = $response.artifacts | Where-Object { $_.name -eq $artifactName }
+
+            if ($null -eq $artifact) {
+              Write-Error "Artifact '$artifactName' not found."
+              exit 1
+            }
+
+            $downloadUrl = $artifact.archive_download_url
+            $zipPath = Join-Path $using:deployPath "loginapi.zip"
+
+            Invoke-WebRequest -Uri $downloadUrl -Headers $headers -OutFile $zipPath
+
+            Write-Host "Downloaded artifact to $zipPath"
+
+            # Extract the zip
+            Expand-Archive -Path $zipPath -DestinationPath $using:deployPath -Force
+            Remove-Item -Path $zipPath
+            Write-Host "Extracted artifact and cleaned up zip"
+
+            # Check PostgreSQL installation, install silently if missing
+            $pgPath = "C:\Program Files\PostgreSQL\16\bin\psql.exe"
+            $pgInstaller = "postgresql-16.1-1-windows-x64.exe"
+
+            if (-not (Test-Path -Path $pg
