@@ -53,9 +53,15 @@ jobs:
           $deployPath = "C:\\inetpub\\wwwroot\\LoginApi"
 
           $psScript = @'
-          if (-not (Test-Path -Path $using:deployPath)) {
+           if (-not (Test-Path -Path $using:deployPath)) {
             New-Item -ItemType Directory -Path $using:deployPath -Force
-          }
+           }
+           # Your long PowerShell deployment script continues here...
+           Write-Host "Deployment completed."
+           '@
+
+           ssh -o StrictHostKeyChecking=no $ec2User@$ec2Host powershell -Command $psScript
+
 
           # Download artifact zip using GitHub API
           $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
