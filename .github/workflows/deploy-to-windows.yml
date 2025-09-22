@@ -62,7 +62,7 @@ jobs:
             } else {
               Write-Host "Deployment directory exists at $using:deployPath"
             }
-            
+            '@
             # Download artifact from GitHub Actions using GitHub API and GITHUB_TOKEN
             $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
             $runId = "${{ github.run_id }}"
