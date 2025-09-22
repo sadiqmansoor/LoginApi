@@ -47,18 +47,12 @@ jobs:
       # ───── Deploy via ssh with PowerShell script ─────
       - name: Deploy to Windows EC2
         shell: pwsh
-        run: |
-          $ec2User = "${{ vars.EC2_USER_WINDOWS }}"
-          $ec2Host = "${{ vars.EC2_HOST_WINDOWS }}"
-          $deployPath = "C:\\inetpub\\wwwroot\\LoginApi"
+           run:|
+           $ec2User = "${{ vars.EC2_USER_WINDOWS }}"
+           $ec2Host = "${{ vars.EC2_HOST_WINDOWS }}"
+           $deployPath = "C:\\inetpub\\wwwroot\\LoginApi"
 
-          $psScript = @'
-           if (-not (Test-Path -Path $using:deployPath)) {
-            New-Item -ItemType Directory -Path $using:deployPath -Force
-           }
-           # Your long PowerShell deployment script continues here...
-           Write-Host "Deployment completed."
-           '@
+           Invoke-Command -ComputerName $ec2Host -Credential (New-Object System.Management.Automation.PSCredential($ec2User, (ConvertTo-SecureString ${{ secrets.EC2_PASSWORD_WINDOWS }} -AsPlainText -Force))) -ScriptBlock { Invoke-Expression $using:psScript }
 
            ssh -o StrictHostKeyChecking=no $ec2User@$ec2Host powershell -Command $psScript
 
