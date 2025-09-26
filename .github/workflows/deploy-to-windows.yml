@@ -21,66 +21,91 @@ jobs:
           dotnet-version: '8.0.x'
 
       # 3. Restore, Build, and Publish the project
-      - name: Build, Publish, and Compress Artifact
+      - name: Build and Publish Artifact
         shell: pwsh
         run: |
           dotnet restore LoginApi.csproj
           # Publish the application to the ./publish directory
           dotnet publish LoginApi.csproj -c Release -o ./publish
-          # Create a single zip file for easier, atomic transfer
-          Compress-Archive -Path ./publish/* -DestinationPath ./loginapi.zip -Force
 
-      # 4. Upload artifact for review
-      - name: Upload artifact for review
+      # 4. Upload published output as artifact
+      # NOTE: This artifact is what the remote EC2 instance will download
+      - name: Upload publish directory as artifact
         uses: actions/upload-artifact@v4
         with:
           name: loginapi-publish
-          path: ./loginapi.zip
+          path: ./publish
+          # zip the file so the EC2 instance can download it as one file
+          retention-days: 1
 
-      # NOTE: Removed Step 4 (Setup SSH Agent) as we are using password authentication.
-      # The appleboy actions handle the connection and password securely.
-
-      # 5. File Transfer using Password Auth
-      - name: Transfer Files via SCP (Password Auth)
-        # We use appleboy/scp-action because it handles password injection securely and reliably.
-        # This action runs in a secure, isolated container on the runner.
-        uses: appleboy/scp-action@v0.1.6
+      # 5. Set up the SSH Authentication agent (Reverting to Key Auth)
+      # This is required for the native 'ssh' command in step 6.
+      - name: Setup SSH Agent (Key Auth)
+        uses: webfactory/ssh-agent@v0.7.0
         with:
-          host: ${{ vars.EC2_HOST_WINDOWS }}
-          username: Administrator
-          # Use the newly created secret for the password
-          password: ${{ secrets.EC2_ADMIN_PASSWORD }}
-          port: 22
-          source: "./loginapi.zip" 
-          # Target path on the Windows EC2 server
-          target: C:/inetpub/wwwroot/LoginApi/
-          overwrite: true
-          # Note: We must use 'Administrator' as the username for EC2 Windows
+          ssh-private-key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
 
-      # 6. Run remote command to extract files and manage the application
-      - name: Extract Files and Restart Application via SSH (Password Auth)
-        # Use appleboy/ssh-action to execute the remote PowerShell script securely.
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ vars.EC2_HOST_WINDOWS }}
-          username: Administrator
-          # Use the password for authentication
-          password: ${{ secrets.EC2_ADMIN_PASSWORD }}
-          port: 22
-          script: |
-            # Define variables using the Windows environment
-            $DEPLOY_PATH="C:\inetpub\wwwroot\LoginApi"
-            $ZIP_FILE="$DEPLOY_PATH\loginapi.zip"
-            $APP_POOL="LoginApiAppPool"
+      # 6. Run deployment PowerShell script remotely via Native SSH
+      # This command performs the entire deployment logic remotely:
+      # - Downloads the artifact zip from GitHub API (avoids SCP container issue)
+      # - Extracts files
+      # - Restarts IIS App Pool
+      - name: Deploy and Restart Application via Native SSH
+        shell: bash
+        run: |
+          REMOTE_HOST="${{ vars.EC2_HOST_WINDOWS }}"
+          DEPLOY_PATH="C:\inetpub\wwwroot\LoginApi"
+          APP_POOL="LoginApiAppPool"
+          
+          # --- Remote PowerShell Script (As a single string) ---
+          # This script runs on the EC2 instance, downloads the artifact, and restarts the service.
+          # It requires heavy escaping for use within the bash 'ssh' command.
+          REMOTE_COMMAND="powershell.exe -ExecutionPolicy Bypass -Command \"
+              \$DEPLOY_PATH='${DEPLOY_PATH}';
+              \$APP_POOL='${APP_POOL}';
+              \$GH_TOKEN='${{ secrets.GITHUB_TOKEN }}'; # Using GITHUB_TOKEN for download auth
+              \$REPO_OWNER='${{ github.repository_owner }}';
+              \$REPO_NAME='${{ github.event.repository.name }}';
+              \$RUN_ID='${{ github.run_id }}';
+              \$ARTIFACT_NAME='loginapi-publish';
+              \$TEMP_ZIP='C:\Users\Administrator\temp_artifact.zip'; # Temp location for download
 
-            # Create directory if it doesn't exist
-            if (-not (Test-Path -Path $DEPLOY_PATH)) { New-Item -ItemType Directory -Path $DEPLOY_PATH -Force };
-            
-            # Extract the zip file (overwrites existing files)
-            Expand-Archive -Path $ZIP_FILE -DestinationPath $DEPLOY_PATH -Force;
-            Remove-Item -Path $ZIP_FILE;
+              # 1. Prepare Environment and Headers
+              # Note: GitHub artifacts are downloaded as a zip. We target the single artifact named 'loginapi-publish'.
+              \$URL = 'https://api.github.com/repos/' + \$REPO_OWNER + '/' + \$REPO_NAME + '/actions/runs/' + \$RUN_ID + '/artifacts';
+              \$HEADERS = @{
+                  'Authorization' = 'token ' + \$GH_TOKEN;
+                  'Accept' = 'application/vnd.github.v3+json';
+              };
 
-            # Restart Application Pool (Requires IIS WebAdministration Module on EC2)
-            Import-Module WebAdministration; 
-            Restart-WebAppPool -Name $APP_POOL -Force;
-            Write-Host 'Deployment successful and App Pool restarted.'
+              # 2. Get Artifact Download URL
+              \$RESPONSE = Invoke-RestMethod -Uri \$URL -Headers \$HEADERS;
+              \$ARTIFACT = \$RESPONSE.artifacts | Where-Object { \$_.name -eq \$ARTIFACT_NAME };
+              
+              if (-not \$ARTIFACT) { throw 'Artifact ' + \$ARTIFACT_NAME + ' not found in the run.'; }
+
+              \$DOWNLOAD_URL = \$ARTIFACT.archive_download_url;
+              
+              # 3. Download Artifact to EC2
+              Write-Host 'Downloading artifact from GitHub API...';
+              Invoke-WebRequest -Uri \$DOWNLOAD_URL -Headers \$HEADERS -OutFile \$TEMP_ZIP;
+              Write-Host 'Download complete.';
+
+              # 4. Prepare Deployment Directory
+              if (-not (Test-Path -Path \$DEPLOY_PATH)) { New-Item -ItemType Directory -Path \$DEPLOY_PATH -Force };
+
+              # 5. Extract and Clean Up
+              # The downloaded artifact is a ZIP file containing the original './publish' folder content.
+              Write-Host 'Extracting files...';
+              Expand-Archive -Path \$TEMP_ZIP -DestinationPath \$DEPLOY_PATH -Force;
+              Remove-Item -Path \$TEMP_ZIP;
+              
+              # 6. Restart IIS App Pool
+              Import-Module WebAdministration; 
+              Restart-WebAppPool -Name \$APP_POOL -Force;
+              Write-Host 'Deployment successful and App Pool ' + \$APP_POOL + ' restarted.'
+          \""
+
+          # Execute the remote command using native SSH
+          # This relies on the synchronized key pair to authenticate password-less.
+          ssh -o StrictHostKeyChecking=no Administrator@$REMOTE_HOST "$REMOTE_COMMAND"
