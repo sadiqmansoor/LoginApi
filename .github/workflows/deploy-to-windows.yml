@@ -35,77 +35,85 @@ jobs:
         with:
           name: loginapi-publish
           path: ./publish
-          # zip the file so the EC2 instance can download it as one file
           retention-days: 1
 
-      # 5. Set up the SSH Authentication agent (Reverting to Key Auth)
-      # This is required for the native 'ssh' command in step 6.
-      - name: Setup SSH Agent (Key Auth)
-        uses: webfactory/ssh-agent@v0.7.0
-        with:
-          ssh-private-key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
-
-      # 6. Run deployment PowerShell script remotely via Native SSH
-      # This command performs the entire deployment logic remotely:
-      # - Downloads the artifact zip from GitHub API (avoids SCP container issue)
-      # - Extracts files
-      # - Restarts IIS App Pool
-      - name: Deploy and Restart Application via Native SSH
-        shell: bash
+      # 5. Install Posh-SSH module for password-based remote execution on Windows runner
+      # This step enables password authentication natively without using containers.
+      - name: Install Posh-SSH Module
+        shell: pwsh
         run: |
-          REMOTE_HOST="${{ vars.EC2_HOST_WINDOWS }}"
-          DEPLOY_PATH="C:\inetpub\wwwroot\LoginApi"
-          APP_POOL="LoginApiAppPool"
-          
-          # --- Remote PowerShell Script (As a single string) ---
-          # This script runs on the EC2 instance, downloads the artifact, and restarts the service.
-          # It requires heavy escaping for use within the bash 'ssh' command.
-          REMOTE_COMMAND="powershell.exe -ExecutionPolicy Bypass -Command \"
-              \$DEPLOY_PATH='${DEPLOY_PATH}';
-              \$APP_POOL='${APP_POOL}';
-              \$GH_TOKEN='${{ secrets.GITHUB_TOKEN }}'; # Using GITHUB_TOKEN for download auth
-              \$REPO_OWNER='${{ github.repository_owner }}';
-              \$REPO_NAME='${{ github.event.repository.name }}';
-              \$RUN_ID='${{ github.run_id }}';
-              \$ARTIFACT_NAME='loginapi-publish';
-              \$TEMP_ZIP='C:\Users\Administrator\temp_artifact.zip'; # Temp location for download
+          Install-Module -Name Posh-SSH -Force -Scope CurrentUser
 
-              # 1. Prepare Environment and Headers
-              # Note: GitHub artifacts are downloaded as a zip. We target the single artifact named 'loginapi-publish'.
-              \$URL = 'https://api.github.com/repos/' + \$REPO_OWNER + '/' + \$REPO_NAME + '/actions/runs/' + \$RUN_ID + '/artifacts';
-              \$HEADERS = @{
-                  'Authorization' = 'token ' + \$GH_TOKEN;
-                  'Accept' = 'application/vnd.github.v3+json';
-              };
+      # 6. Run deployment PowerShell script remotely using Posh-SSH and Password
+      # This approach relies on the password you confirmed works manually.
+      - name: Deploy and Restart Application via Posh-SSH (Password Auth)
+        shell: pwsh
+        run: |
+          # Define connection parameters
+          $remoteHost = "${{ vars.EC2_HOST_WINDOWS }}"
+          $username = "Administrator"
+          # Securely retrieve the password from the GitHub secret
+          $password = "${{ secrets.EC2_ADMIN_PASSWORD }}"
+          $deployPath = "C:\inetpub\wwwroot\LoginApi"
+          $appPool = "LoginApiAppPool"
+          
+          # --- Remote PowerShell Script (As a multi-line string block) ---
+          # We define the remote script locally in the runner
+          $remoteScript = @'
+              param(
+                  [Parameter(Mandatory=$true)][string]$DeployPath,
+                  [Parameter(Mandatory=$true)][string]$AppPool,
+                  [Parameter(Mandatory=$true)][string]$GhToken,
+                  [Parameter(Mandatory=$true)][string]$RepoOwner,
+                  [Parameter(Mandatory=$true)][string]$RepoName,
+                  [Parameter(Mandatory=$true)][string]$RunId,
+                  [Parameter(Mandatory=$true)][string]$ArtifactName
+              )
+
+              $TEMP_ZIP = "C:\Users\Administrator\temp_artifact.zip"
+              $URL = "https://api.github.com/repos/$RepoOwner/$RepoName/actions/runs/$RunId/artifacts"
+              
+              # 1. Prepare Headers (requires GITHUB_TOKEN)
+              $HEADERS = @{
+                  "Authorization" = "token $GhToken";
+                  "Accept" = "application/vnd.github.v3+json";
+              }
 
               # 2. Get Artifact Download URL
-              \$RESPONSE = Invoke-RestMethod -Uri \$URL -Headers \$HEADERS;
-              \$ARTIFACT = \$RESPONSE.artifacts | Where-Object { \$_.name -eq \$ARTIFACT_NAME };
+              $RESPONSE = Invoke-RestMethod -Uri $URL -Headers $HEADERS
+              $ARTIFACT = $RESPONSE.artifacts | Where-Object { $_.name -eq $ArtifactName }
               
-              if (-not \$ARTIFACT) { throw 'Artifact ' + \$ARTIFACT_NAME + ' not found in the run.'; }
+              if (-not $ARTIFACT) { throw "Artifact $ArtifactName not found in the run." }
 
-              \$DOWNLOAD_URL = \$ARTIFACT.archive_download_url;
+              $DOWNLOAD_URL = $ARTIFACT.archive_download_url
               
               # 3. Download Artifact to EC2
-              Write-Host 'Downloading artifact from GitHub API...';
-              Invoke-WebRequest -Uri \$DOWNLOAD_URL -Headers \$HEADERS -OutFile \$TEMP_ZIP;
-              Write-Host 'Download complete.';
+              Write-Host "Downloading artifact from GitHub API..."
+              Invoke-WebRequest -Uri $DOWNLOAD_URL -Headers $HEADERS -OutFile $TEMP_ZIP
+              Write-Host "Download complete."
 
               # 4. Prepare Deployment Directory
-              if (-not (Test-Path -Path \$DEPLOY_PATH)) { New-Item -ItemType Directory -Path \$DEPLOY_PATH -Force };
+              if (-not (Test-Path -Path $DeployPath)) { New-Item -ItemType Directory -Path $DeployPath -Force }
 
               # 5. Extract and Clean Up
-              # The downloaded artifact is a ZIP file containing the original './publish' folder content.
-              Write-Host 'Extracting files...';
-              Expand-Archive -Path \$TEMP_ZIP -DestinationPath \$DEPLOY_PATH -Force;
-              Remove-Item -Path \$TEMP_ZIP;
+              Write-Host "Extracting files..."
+              Expand-Archive -Path $TEMP_ZIP -DestinationPath $DeployPath -Force
+              Remove-Item -Path $TEMP_ZIP
               
               # 6. Restart IIS App Pool
               Import-Module WebAdministration; 
-              Restart-WebAppPool -Name \$APP_POOL -Force;
-              Write-Host 'Deployment successful and App Pool ' + \$APP_POOL + ' restarted.'
-          \""
-
-          # Execute the remote command using native SSH
-          # This relies on the synchronized key pair to authenticate password-less.
-          ssh -o StrictHostKeyChecking=no Administrator@$REMOTE_HOST "$REMOTE_COMMAND"
+              Restart-WebAppPool -Name $AppPool -Force
+              Write-Host "Deployment successful and App Pool $AppPool restarted."
+'@
+          
+          # Execute the script remotely using Posh-SSH (Password Auth)
+          # We convert the plain text password secret to a SecureString credential object for Invoke-SSHCommand
+          Invoke-SSHCommand -ComputerName $remoteHost -Credential (New-Object System.Management.Automation.PSCredential($username, (ConvertTo-SecureString $password -AsPlainText -Force))) -Script $remoteScript -ArgumentList @(
+              $deployPath, 
+              $appPool, 
+              "${{ secrets.GITHUB_TOKEN }}", 
+              "${{ github.repository_owner }}", 
+              "${{ github.event.repository.name }}", 
+              "${{ github.run_id }}", 
+              "loginapi-publish"
+          )
