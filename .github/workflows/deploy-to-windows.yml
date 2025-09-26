@@ -1,4 +1,5 @@
 name: CI/CD for LoginApi to Windows EC2
+
 on:
   push:
     branches: [ main ]
@@ -6,97 +7,75 @@ on:
 jobs:
   deploy-loginapi-windows:
     runs-on: windows-latest
+    
     steps:
-      # Checkout source code
+      # 1. Checkout source code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Setup .NET SDK 8.x
+      # 2. Setup .NET SDK 8.x
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
-      # Restore dependencies with PowerShell shell
-      - name: Restore packages
-        run: dotnet restore LoginApi.csproj
+      # 3. Restore, Build, and Publish the project
+      - name: Build and Publish project
         shell: pwsh
+        run: |
+          dotnet restore LoginApi.csproj
+          dotnet publish LoginApi.csproj -c Release -o ./publish
 
-      # Build project
-      - name: Build project
-        run: dotnet build LoginApi.csproj --configuration Release
-        shell: pwsh
-
-      # Publish project
-      - name: Publish project
-        run: dotnet publish LoginApi.csproj -c Release -o ./publish
-        shell: pwsh
-
-      # Upload published output as artifact
-      - name: Upload artifact
+      # The upload-artifact step is useful for review, but typically skipped in a direct deploy workflow
+      # Keeping it here as requested in the original script.
+      - name: Upload artifact for review
         uses: actions/upload-artifact@v4
         with:
           name: loginapi-publish
           path: ./publish
 
-      # Set up the SSH Authentication agent to use private key
-      - name: Setup SSH Agent
-        uses: webfactory/ssh-agent@v0.7.0
+      # 4. Deploy files using SCP
+      # This replaces the complex and incomplete artifact download script.
+      - name: Deploy files to Windows EC2 (SCP)
+        uses: appleboy/scp-action@v0.1.6
         with:
-          ssh-private-key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
+          host: ${{ vars.EC2_HOST_WINDOWS }}
+          username: Administrator
+          key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
+          port: 22
+          # Source is the output folder created during 'dotnet publish'
+          source: "./publish/*" 
+          # Target path on the Windows EC2 server
+          target: C:/inetpub/wwwroot/LoginApi/
+          overwrite: true
+          # Note: We must use 'Administrator' as the username for EC2 Windows
 
-      # Run deployment PowerShell script remotely on Windows EC2 via SSH
-      - name: Deploy to Windows EC2
-        shell: pwsh
-        run: |
-          $ec2User = "${{ vars.EC2_USER_WINDOWS }}"
-          $ec2Host = "${{ vars.EC2_HOST_WINDOWS }}"
-          $deployPath = "C:\inetpub\wwwroot\LoginApi"
-
-          # Define the entire deployment PowerShell script as a here-string
-          
-          $psScript = @'
-
-              if (-not (Test-Path -Path $using:deployPath)) {
-                New-Item -ItemType Directory -Path $using:deployPath -Force
-                Write-Host "Created deployment directory."
-              } else {
-               Write-Host "Deployment directory exists."
-              }'@
-
-               $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
-               $runId = "${{ github.run_id }}"
-               $repo = "${{ github.repository }}"
-
-            $url = "https://api.github.com/repos/$repo/actions/runs/$runId/artifacts"
-            $headers = @{
-              "Authorization" = "token $env:GITHUB_TOKEN"
-              "Accept" = "application/vnd.github.v3+json"
-            }
-
-            $response = Invoke-RestMethod -Uri $url -Headers $headers
-            $artifactName = "loginapi-publish"
-            $artifact = $response.artifacts | Where-Object { $_.name -eq $artifactName }
-
-            if ($null -eq $artifact) {
-              Write-Error "Artifact '$artifactName' not found."
-              exit 1
-            }
-
-            $downloadUrl = $artifact.archive_download_url
-            $zipPath = Join-Path $using:deployPath "loginapi.zip"
-
-            Invoke-WebRequest -Uri $downloadUrl -Headers $headers -OutFile $zipPath
-
-            Write-Host "Downloaded artifact to $zipPath"
-
-            # Extract the zip
-            Expand-Archive -Path $zipPath -DestinationPath $using:deployPath -Force
-            Remove-Item -Path $zipPath
-            Write-Host "Extracted artifact and cleaned up zip"
-
-            # Check PostgreSQL installation, install silently if missing
-            $pgPath = "C:\Program Files\PostgreSQL\16\bin\psql.exe"
-            $pgInstaller = "postgresql-16.1-1-windows-x64.exe"
-
-            if (-not (Test-Path -Path $pg
+      # 5. Run remote command to manage the application (e.g., restart IIS or stop/start the console app)
+      - name: Restart Application via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.EC2_HOST_WINDOWS }}
+          username: Administrator
+          key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
+          port: 22
+          script: |
+            # PowerShell commands to stop and start the application on the remote server
+            # NOTE: Replace 'YourServiceName' with the actual Windows Service name for your app, 
+            # or if it's a simple console app, run the executable directly.
+            
+            # Example for an IIS/Kestrel-hosted service:
+            $ServiceName = "LoginApiAppPool"
+            
+            # Restart Application Pool (if hosted in IIS)
+            # You must have IIS WebAdministration module installed on the EC2 instance
+            Invoke-Command -ComputerName localhost -ScriptBlock {
+                Import-Module WebAdministration
+                Restart-WebAppPool -Name $using:ServiceName -Force
+                Write-Host "Application pool '$using:ServiceName' restarted."
+            } 
+            
+            # OR, if running as a console application (e.g., using NSSM to manage a service):
+            # Stop-Service -Name "LoginApi-Service"
+            # Start-Service -Name "LoginApi-Service"
+            
+            Write-Host "Deployment complete."
