@@ -62,8 +62,7 @@ jobs:
                 Write-Host "Created deployment directory."
               } else {
                Write-Host "Deployment directory exists."
-              }
-'@
+              }'@
 
                $env:GITHUB_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
                $runId = "${{ github.run_id }}"
