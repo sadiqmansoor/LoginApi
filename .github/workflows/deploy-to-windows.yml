@@ -104,7 +104,7 @@ jobs:
               Import-Module WebAdministration; 
               Restart-WebAppPool -Name $AppPool -Force
               Write-Host "Deployment successful and App Pool $AppPool restarted."
-'@
+              '@
           
           # Execute the script remotely using Posh-SSH (Password Auth)
           # We convert the plain text password secret to a SecureString credential object for Invoke-SSHCommand
