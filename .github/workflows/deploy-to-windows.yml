@@ -27,62 +27,60 @@ jobs:
           dotnet restore LoginApi.csproj
           # Publish the application to the ./publish directory
           dotnet publish LoginApi.csproj -c Release -o ./publish
-          # Create a single zip file for easier, atomic transfer via SCP
+          # Create a single zip file for easier, atomic transfer
           Compress-Archive -Path ./publish/* -DestinationPath ./loginapi.zip -Force
 
-      # The upload-artifact step is no longer strictly necessary for deployment
-      # but is kept here for review purposes if needed.
+      # 4. Upload artifact for review
       - name: Upload artifact for review
         uses: actions/upload-artifact@v4
         with:
           name: loginapi-publish
           path: ./loginapi.zip
 
-      # 4. Set up the SSH Authentication agent
-      # This step makes the private key available to the native 'ssh' and 'scp' commands.
-      - name: Setup SSH Agent
-        uses: webfactory/ssh-agent@v0.7.0
-        with:
-          ssh-private-key: ${{ secrets.EC2_SSH_KEY_WINDOWS }}
+      # NOTE: Removed Step 4 (Setup SSH Agent) as we are using password authentication.
+      # The appleboy actions handle the connection and password securely.
 
-      # 5. Native File Transfer (SCP)
-      # We use the 'bash' shell to execute the standard scp command for file transfer.
-      - name: Transfer Files via Native SCP
-        shell: bash
-        run: |
-          REMOTE_HOST="${{ vars.EC2_HOST_WINDOWS }}"
-          DEPLOY_PATH='C:/inetpub/wwwroot/LoginApi'
-          
-          # Use '-o StrictHostKeyChecking=no' to avoid interactive host key prompt
-          # The key is automatically used by the ssh-agent
-          # Note: The target path is quoted to handle spaces correctly.
-          scp -o StrictHostKeyChecking=no ./loginapi.zip Administrator@$REMOTE_HOST:"$DEPLOY_PATH/loginapi.zip"
-          echo "File transfer complete."
+      # 5. File Transfer using Password Auth
+      - name: Transfer Files via SCP (Password Auth)
+        # We use appleboy/scp-action because it handles password injection securely and reliably.
+        # This action runs in a secure, isolated container on the runner.
+        uses: appleboy/scp-action@v0.1.6
+        with:
+          host: ${{ vars.EC2_HOST_WINDOWS }}
+          username: Administrator
+          # Use the newly created secret for the password
+          password: ${{ secrets.EC2_ADMIN_PASSWORD }}
+          port: 22
+          source: "./loginapi.zip" 
+          # Target path on the Windows EC2 server
+          target: C:/inetpub/wwwroot/LoginApi/
+          overwrite: true
+          # Note: We must use 'Administrator' as the username for EC2 Windows
 
       # 6. Run remote command to extract files and manage the application
-      # We use the 'bash' shell to execute the 'ssh' command, which runs a PowerShell script remotely.
-      - name: Extract Files and Restart Application via Native SSH
-        shell: bash
-        run: |
-          REMOTE_HOST="${{ vars.EC2_HOST_WINDOWS }}"
-          DEPLOY_PATH="C:/inetpub/wwwroot/LoginApi"
-          ZIP_FILE="$DEPLOY_PATH/loginapi.zip"
-          APP_POOL="LoginApiAppPool"
+      - name: Extract Files and Restart Application via SSH (Password Auth)
+        # Use appleboy/ssh-action to execute the remote PowerShell script securely.
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.EC2_HOST_WINDOWS }}
+          username: Administrator
+          # Use the password for authentication
+          password: ${{ secrets.EC2_ADMIN_PASSWORD }}
+          port: 22
+          script: |
+            # Define variables using the Windows environment
+            $DEPLOY_PATH="C:\inetpub\wwwroot\LoginApi"
+            $ZIP_FILE="$DEPLOY_PATH\loginapi.zip"
+            $APP_POOL="LoginApiAppPool"
 
-          # This entire PowerShell script is built as a string, requiring heavy escaping 
-          # to ensure it executes correctly inside the remote SSH command.
-          REMOTE_COMMAND="powershell.exe -ExecutionPolicy Bypass -Command \"
-              # Create directory if it doesn't exist
-              if (-not (Test-Path -Path \$DEPLOY_PATH)) { New-Item -ItemType Directory -Path \$DEPLOY_PATH -Force };
-              
-              # Extract the zip file (overwrites existing files)
-              Expand-Archive -Path \$ZIP_FILE -DestinationPath \$DEPLOY_PATH -Force;
-              Remove-Item -Path \$ZIP_FILE;
+            # Create directory if it doesn't exist
+            if (-not (Test-Path -Path $DEPLOY_PATH)) { New-Item -ItemType Directory -Path $DEPLOY_PATH -Force };
+            
+            # Extract the zip file (overwrites existing files)
+            Expand-Archive -Path $ZIP_FILE -DestinationPath $DEPLOY_PATH -Force;
+            Remove-Item -Path $ZIP_FILE;
 
-              # Restart Application Pool (Requires IIS WebAdministration Module on EC2)
-              Import-Module WebAdministration; 
-              Restart-WebAppPool -Name \$APP_POOL -Force;
-              Write-Host 'Deployment successful and App Pool restarted.'\""
-
-          # Execute the remote command using native SSH
-          ssh -o StrictHostKeyChecking=no Administrator@$REMOTE_HOST "$REMOTE_COMMAND"
+            # Restart Application Pool (Requires IIS WebAdministration Module on EC2)
+            Import-Module WebAdministration; 
+            Restart-WebAppPool -Name $APP_POOL -Force;
+            Write-Host 'Deployment successful and App Pool restarted.'
