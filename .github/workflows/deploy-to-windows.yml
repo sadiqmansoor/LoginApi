@@ -35,7 +35,7 @@ jobs:
         run: |
           Install-Module -Name Posh-SSH -Force -Scope CurrentUser
 
-      - name: Deploy and Restart Application via Posh-SSH (Password Auth)
+      - name: Deploy, Setup PostgreSQL, and Run EF Migration
         shell: pwsh
         run: |
           $remoteHost = "${{ vars.EC2_HOST_WINDOWS }}"
@@ -43,16 +43,13 @@ jobs:
           $password = "${{ secrets.EC2_ADMIN_PASSWORD }}"
           $deployPath = "C:\inetpub\wwwroot\LoginApi"
           $appPool = "LoginApiAppPool"
-
           $GhToken = "${{ secrets.GITHUB_TOKEN }}"
           $RepoOwner = "${{ github.repository_owner }}"
           $RepoName = "${{ github.event.repository.name }}"
           $RunId = "${{ github.run_id }}"
           $ArtifactName = "loginapi-publish"
-
           $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
           $credential = New-Object System.Management.Automation.PSCredential($username, $securePassword)
-
           Write-Host "Establishing SSH session..."
           $session = New-SSHSession -HostName $remoteHost -Credential $credential -AcceptKey -ErrorAction Stop
 
@@ -64,35 +61,39 @@ jobs:
           `$RepoName = '$RepoName'
           `$RunId = '$RunId'
           `$ArtifactName = '$ArtifactName'
-
           `$TEMP_ZIP = 'C:\Users\Administrator\temp_artifact.zip'
           `$URL = "https://api.github.com/repos/$RepoOwner/$RepoName/actions/runs/$RunId/artifacts"
-
           `$HEADERS = @{
               "Authorization" = "token `$GhToken";
               "Accept" = "application/vnd.github.v3+json";
           }
-
           `$RESPONSE = Invoke-RestMethod -Uri `$URL -Headers `$HEADERS
           `$ARTIFACT = `$RESPONSE.artifacts | Where-Object { `$_.name -eq `$ArtifactName }
-
           if (-not `$ARTIFACT) { throw "Artifact `$ArtifactName not found in the run." }
-
           `$DOWNLOAD_URL = `$ARTIFACT.archive_download_url
-
           Write-Host "Downloading artifact from GitHub API..."
           Invoke-WebRequest -Uri `$DOWNLOAD_URL -Headers `$HEADERS -OutFile `$TEMP_ZIP
           Write-Host "Download complete."
-
           if (-not (Test-Path -Path `$DeployPath)) { New-Item -ItemType Directory -Path `$DeployPath -Force }
-
           Write-Host "Extracting files..."
           Expand-Archive -Path `$TEMP_ZIP -DestinationPath `$DeployPath -Force
           Remove-Item -Path `$TEMP_ZIP
-
           Import-Module WebAdministration
           Restart-WebAppPool -Name `$AppPool -Force
           Write-Host "Deployment successful and App Pool `$AppPool restarted."
+
+          # --- PostgreSQL Installation ---
+          `$pgInstaller = "https://get.enterprisedb.com/postgresql/postgresql-15.5-1-windows-x64.exe"
+          `$pgExe = "C:\Users\Administrator\pginstaller.exe"
+          Invoke-WebRequest -Uri `$pgInstaller -OutFile `$pgExe
+          Start-Process -FilePath `$pgExe -ArgumentList "--mode unattended --unattendedmodeui minimal --superpassword postgres123 --prefix C:\PostgreSQL" -Wait
+
+          # --- Run EF Core Migration ---
+          Write-Host "Running EF Core migration..."
+          Push-Location `$DeployPath
+          dotnet LoginApi.dll migrate
+          Pop-Location
+          Write-Host "Migration completed."
           "@
 
           Invoke-SSHCommand -SshSession $session -Command $finalCommand
