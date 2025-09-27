@@ -87,6 +87,14 @@ jobs:
           [System.IO.Compression.ZipFile]::ExtractToDirectory(`$TEMP_ZIP, `$DeployPath)
           Remove-Item -Path `$TEMP_ZIP
 
+          # --- Flatten nested publish folder if present ---
+          `$nestedPath = Join-Path `$DeployPath "publish"
+          if (Test-Path `$nestedPath) {
+              Write-Host "Flattening nested publish folder..."
+              Get-ChildItem -Path `$nestedPath -Recurse | Move-Item -Destination `$DeployPath -Force
+              Remove-Item -Path `$nestedPath -Recurse -Force
+          }
+
           # --- Configure IIS Application ---
           Import-Module WebAdministration
           if (-not (Test-Path IIS:\AppPools\$AppPool)) {
