@@ -45,7 +45,7 @@ jobs:
           Install-Module -Name Posh-SSH -Force -Scope CurrentUser
 
       # 6. Run deployment PowerShell script remotely using Posh-SSH and Password
-      # This approach relies on the password you confirmed works manually.
+      # We establish a session first to bypass parameter ambiguity in Invoke-SSHCommand.
       - name: Deploy and Restart Application via Posh-SSH (Password Auth)
         shell: pwsh
         run: |
@@ -56,6 +56,14 @@ jobs:
           $password = "${{ secrets.EC2_ADMIN_PASSWORD }}"
           $deployPath = "C:\inetpub\wwwroot\LoginApi"
           $appPool = "LoginApiAppPool"
+          
+          # 1. Create PSCredential Object
+          $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+          $credential = New-Object System.Management.Automation.PSCredential($username, $securePassword)
+          
+          # 2. Establish SSH Session (HostName is the reliable parameter here)
+          Write-Host "Establishing SSH session..."
+          $session = New-SSHSession -HostName $remoteHost -Credential $credential -AcceptKey -ErrorAction Stop
           
           # --- Remote PowerShell Script (As a multi-line string block) ---
           # We define the remote script locally in the runner
@@ -106,9 +114,8 @@ jobs:
               Write-Host "Deployment successful and App Pool $AppPool restarted."
           '@
           
-          # Execute the script remotely using Posh-SSH (Password Auth)
-          # We convert the plain text password secret to a SecureString credential object for Invoke-SSHCommand
-          Invoke-SSHCommand -Host $remoteHost -Credential (New-Object System.Management.Automation.PSCredential($username, (ConvertTo-SecureString $password -AsPlainText -Force))) -Script $remoteScript -ArgumentList @(
+          # 3. Execute the script remotely using the established session
+          Invoke-SSHCommand -SshSession $session -Script $remoteScript -ArgumentList @(
               $deployPath, 
               $appPool, 
               "${{ secrets.GITHUB_TOKEN }}", 
@@ -117,3 +124,6 @@ jobs:
               "${{ github.run_id }}", 
               "loginapi-publish"
           )
+          
+          # 4. Close the session
+          Remove-SSHSession -SshSession $session
