@@ -35,7 +35,7 @@ jobs:
         run: |
           Install-Module -Name Posh-SSH -Force -Scope CurrentUser
 
-      - name: Deploy, Setup PostgreSQL, and Run EF Migration
+      - name: Deploy, Setup IIS + PostgreSQL, and Run EF Migration
         shell: pwsh
         run: |
           $remoteHost = "${{ vars.EC2_HOST_WINDOWS }}"
@@ -67,19 +67,36 @@ jobs:
               "Authorization" = "token `$GhToken";
               "Accept" = "application/vnd.github.v3+json";
           }
+
+          # --- Ensure IIS is Installed ---
+          Write-Host "Installing IIS if not present..."
+          Install-WindowsFeature -Name Web-Server -IncludeManagementTools
+
+          # --- Download Artifact ---
           `$RESPONSE = Invoke-RestMethod -Uri `$URL -Headers `$HEADERS
           `$ARTIFACT = `$RESPONSE.artifacts | Where-Object { `$_.name -eq `$ArtifactName }
           if (-not `$ARTIFACT) { throw "Artifact `$ArtifactName not found in the run." }
           `$DOWNLOAD_URL = `$ARTIFACT.archive_download_url
-          Write-Host "Downloading artifact from GitHub API..."
           Invoke-WebRequest -Uri `$DOWNLOAD_URL -Headers `$HEADERS -OutFile `$TEMP_ZIP
-          Write-Host "Download complete."
+
+          # --- Prepare Deployment Directory ---
           if (-not (Test-Path -Path `$DeployPath)) { New-Item -ItemType Directory -Path `$DeployPath -Force }
-          Write-Host "Extracting files..."
-          Expand-Archive -Path `$TEMP_ZIP -DestinationPath `$DeployPath -Force
+
+          # --- Extract Artifact ---
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory(`$TEMP_ZIP, `$DeployPath)
           Remove-Item -Path `$TEMP_ZIP
+
+          # --- Configure IIS Application ---
           Import-Module WebAdministration
-          Restart-WebAppPool -Name `$AppPool -Force
+          if (-not (Test-Path IIS:\AppPools\$AppPool)) {
+              New-WebAppPool -Name `$AppPool
+              Set-ItemProperty IIS:\AppPools\$AppPool -Name "managedRuntimeVersion" -Value ""
+          }
+          if (-not (Test-Path IIS:\Sites\Default Web Site\LoginApi)) {
+              New-WebApplication -Site "Default Web Site" -Name "LoginApi" -PhysicalPath `$DeployPath -ApplicationPool `$AppPool
+          }
+          Restart-WebAppPool -Name `$AppPool
           Write-Host "Deployment successful and App Pool `$AppPool restarted."
 
           # --- PostgreSQL Installation ---
@@ -89,7 +106,6 @@ jobs:
           Start-Process -FilePath `$pgExe -ArgumentList "--mode unattended --unattendedmodeui minimal --superpassword postgres123 --prefix C:\PostgreSQL" -Wait
 
           # --- Run EF Core Migration ---
-          Write-Host "Running EF Core migration..."
           Push-Location `$DeployPath
           dotnet LoginApi.dll migrate
           Pop-Location
