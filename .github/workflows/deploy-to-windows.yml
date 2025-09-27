@@ -6,30 +6,23 @@ on:
 
 jobs:
   deploy-loginapi-windows:
-    # Use the Windows runner
     runs-on: windows-latest
-    
+
     steps:
-      # 1. Checkout source code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 2. Setup .NET SDK 8.x
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
-      # 3. Restore, Build, and Publish the project
       - name: Build and Publish Artifact
         shell: pwsh
         run: |
           dotnet restore LoginApi.csproj
-          # Publish the application to the ./publish directory
           dotnet publish LoginApi.csproj -c Release -o ./publish
 
-      # 4. Upload published output as artifact
-      # NOTE: This artifact is what the remote EC2 instance will download
       - name: Upload publish directory as artifact
         uses: actions/upload-artifact@v4
         with:
@@ -37,93 +30,70 @@ jobs:
           path: ./publish
           retention-days: 1
 
-      # 5. Install Posh-SSH module for password-based remote execution on Windows runner
-      # This step enables password authentication natively without using containers.
       - name: Install Posh-SSH Module
         shell: pwsh
         run: |
           Install-Module -Name Posh-SSH -Force -Scope CurrentUser
 
-      # 6. Run deployment PowerShell script remotely using Posh-SSH and Password
-      # We establish a session first to bypass parameter ambiguity in Invoke-SSHCommand.
       - name: Deploy and Restart Application via Posh-SSH (Password Auth)
         shell: pwsh
         run: |
-          # Define connection parameters
           $remoteHost = "${{ vars.EC2_HOST_WINDOWS }}"
           $username = "Administrator"
-          # Securely retrieve the password from the GitHub secret
           $password = "${{ secrets.EC2_ADMIN_PASSWORD }}"
           $deployPath = "C:\inetpub\wwwroot\LoginApi"
           $appPool = "LoginApiAppPool"
-          
-          # 1. Create PSCredential Object
+
+          $GhToken = "${{ secrets.GITHUB_TOKEN }}"
+          $RepoOwner = "${{ github.repository_owner }}"
+          $RepoName = "${{ github.event.repository.name }}"
+          $RunId = "${{ github.run_id }}"
+          $ArtifactName = "loginapi-publish"
+
           $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
           $credential = New-Object System.Management.Automation.PSCredential($username, $securePassword)
-          
-          # 2. Establish SSH Session (HostName is the reliable parameter here)
+
           Write-Host "Establishing SSH session..."
           $session = New-SSHSession -HostName $remoteHost -Credential $credential -AcceptKey -ErrorAction Stop
-          
-          # --- Remote PowerShell Script (As a multi-line string block) ---
-          # We define the remote script locally in the runner
-          $remoteScript = @'
-              param(
-                  [Parameter(Mandatory=$true)][string]$DeployPath,
-                  [Parameter(Mandatory=$true)][string]$AppPool,
-                  [Parameter(Mandatory=$true)][string]$GhToken,
-                  [Parameter(Mandatory=$true)][string]$RepoOwner,
-                  [Parameter(Mandatory=$true)][string]$RepoName,
-                  [Parameter(Mandatory=$true)][string]$RunId,
-                  [Parameter(Mandatory=$true)][string]$ArtifactName
-              )
 
-              $TEMP_ZIP = "C:\Users\Administrator\temp_artifact.zip"
-              $URL = "https://api.github.com/repos/$RepoOwner/$RepoName/actions/runs/$RunId/artifacts"
-              
-              # 1. Prepare Headers (requires GITHUB_TOKEN)
-              $HEADERS = @{
-                  "Authorization" = "token $GhToken";
-                  "Accept" = "application/vnd.github.v3+json";
-              }
+          $finalCommand = @"
+          `$DeployPath = '$deployPath'
+          `$AppPool = '$appPool'
+          `$GhToken = '$GhToken'
+          `$RepoOwner = '$RepoOwner'
+          `$RepoName = '$RepoName'
+          `$RunId = '$RunId'
+          `$ArtifactName = '$ArtifactName'
 
-              # 2. Get Artifact Download URL
-              $RESPONSE = Invoke-RestMethod -Uri $URL -Headers $HEADERS
-              $ARTIFACT = $RESPONSE.artifacts | Where-Object { $_.name -eq $ArtifactName }
-              
-              if (-not $ARTIFACT) { throw "Artifact $ArtifactName not found in the run." }
+          `$TEMP_ZIP = 'C:\Users\Administrator\temp_artifact.zip'
+          `$URL = "https://api.github.com/repos/$RepoOwner/$RepoName/actions/runs/$RunId/artifacts"
 
-              $DOWNLOAD_URL = $ARTIFACT.archive_download_url
-              
-              # 3. Download Artifact to EC2
-              Write-Host "Downloading artifact from GitHub API..."
-              Invoke-WebRequest -Uri $DOWNLOAD_URL -Headers $HEADERS -OutFile $TEMP_ZIP
-              Write-Host "Download complete."
+          `$HEADERS = @{
+              "Authorization" = "token `$GhToken";
+              "Accept" = "application/vnd.github.v3+json";
+          }
 
-              # 4. Prepare Deployment Directory
-              if (-not (Test-Path -Path $DeployPath)) { New-Item -ItemType Directory -Path $DeployPath -Force }
+          `$RESPONSE = Invoke-RestMethod -Uri `$URL -Headers `$HEADERS
+          `$ARTIFACT = `$RESPONSE.artifacts | Where-Object { `$_.name -eq `$ArtifactName }
 
-              # 5. Extract and Clean Up
-              Write-Host "Extracting files..."
-              Expand-Archive -Path $TEMP_ZIP -DestinationPath $DeployPath -Force
-              Remove-Item -Path $TEMP_ZIP
-              
-              # 6. Restart IIS App Pool
-              Import-Module WebAdministration; 
-              Restart-WebAppPool -Name $AppPool -Force
-              Write-Host "Deployment successful and App Pool $AppPool restarted."
-          '@
-          
-          # 3. Execute the script remotely using the established session
-          Invoke-SSHCommand -SshSession $session -Command $remoteScript -ArgumentList @(
-              $deployPath, 
-              $appPool, 
-              "${{ secrets.GITHUB_TOKEN }}", 
-              "${{ github.repository_owner }}", 
-              "${{ github.event.repository.name }}", 
-              "${{ github.run_id }}", 
-              "loginapi-publish"
-          )
-          
-          # 4. Close the session
+          if (-not `$ARTIFACT) { throw "Artifact `$ArtifactName not found in the run." }
+
+          `$DOWNLOAD_URL = `$ARTIFACT.archive_download_url
+
+          Write-Host "Downloading artifact from GitHub API..."
+          Invoke-WebRequest -Uri `$DOWNLOAD_URL -Headers `$HEADERS -OutFile `$TEMP_ZIP
+          Write-Host "Download complete."
+
+          if (-not (Test-Path -Path `$DeployPath)) { New-Item -ItemType Directory -Path `$DeployPath -Force }
+
+          Write-Host "Extracting files..."
+          Expand-Archive -Path `$TEMP_ZIP -DestinationPath `$DeployPath -Force
+          Remove-Item -Path `$TEMP_ZIP
+
+          Import-Module WebAdministration
+          Restart-WebAppPool -Name `$AppPool -Force
+          Write-Host "Deployment successful and App Pool `$AppPool restarted."
+          "@
+
+          Invoke-SSHCommand -SshSession $session -Command $finalCommand
           Remove-SSHSession -SshSession $session
