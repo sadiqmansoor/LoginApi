@@ -16,7 +16,7 @@ jobs:
 
       # 2. Setup .NET SDK 8.x
       - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+        uses: actions:setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
 
@@ -115,7 +115,7 @@ jobs:
           '@
           
           # 3. Execute the script remotely using the established session
-          Invoke-SSHCommand -SshSession $session -Script $remoteScript -ArgumentList @(
+          Invoke-SSHCommand -SshSession $session -Command $remoteScript -ArgumentList @(
               $deployPath, 
               $appPool, 
               "${{ secrets.GITHUB_TOKEN }}", 
