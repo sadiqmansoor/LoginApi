@@ -108,7 +108,7 @@ jobs:
           
           # Execute the script remotely using Posh-SSH (Password Auth)
           # We convert the plain text password secret to a SecureString credential object for Invoke-SSHCommand
-          Invoke-SSHCommand -ComputerName $remoteHost -Credential (New-Object System.Management.Automation.PSCredential($username, (ConvertTo-SecureString $password -AsPlainText -Force))) -Script $remoteScript -ArgumentList @(
+          Invoke-SSHCommand -Host $remoteHost -Credential (New-Object System.Management.Automation.PSCredential($username, (ConvertTo-SecureString $password -AsPlainText -Force))) -Script $remoteScript -ArgumentList @(
               $deployPath, 
               $appPool, 
               "${{ secrets.GITHUB_TOKEN }}", 
