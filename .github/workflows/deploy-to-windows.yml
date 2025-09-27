@@ -90,7 +90,7 @@ jobs:
           `$dllPath = Get-ChildItem -Path `$DeployPath -Recurse -Filter "LoginApi.dll" | Select-Object -First 1
           if (`$dllPath) {
               `$sourceFolder = `$dllPath.Directory.FullName
-              Write-Host "Found LoginApi.dll in: `$sourceFolder. Moving contents to root..."
+              Write-Host "Found LoginApi.dll in: `$sourceFolder. Moving contents to `$DeployPath..."
               Get-ChildItem -Path "`$sourceFolder\*" -Force | Move-Item -Destination `$DeployPath -Force
               Remove-Item -Path `$sourceFolder -Recurse -Force
           } else {
