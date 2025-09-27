@@ -35,13 +35,15 @@ jobs:
         run: |
           Install-Module -Name Posh-SSH -Force -Scope CurrentUser
 
-      - name: Deploy and Restart Application via Posh-SSH (Password Auth)
+      - name: Deploy and Inspect Artifact on EC2
         shell: pwsh
         run: |
           $remoteHost = "${{ vars.EC2_HOST_WINDOWS }}"
           $username = "Administrator"
           $password = "${{ secrets.EC2_ADMIN_PASSWORD }}"
           $deployPath = "C:\inetpub\wwwroot\LoginApi"
+          $artifactPath = "C:\Users\Administrator\Artifacts"
+          $artifactZip = "$artifactPath\loginapi.zip"
           $appPool = "LoginApiAppPool"
           $GhToken = "${{ secrets.GITHUB_TOKEN }}"
           $RepoOwner = "${{ github.repository_owner }}"
@@ -57,13 +59,14 @@ jobs:
 
           $finalCommand = @"
           `$DeployPath = '$deployPath'
+          `$ArtifactPath = '$artifactPath'
+          `$ArtifactZip = '$artifactZip'
           `$AppPool = '$appPool'
           `$GhToken = '$GhToken'
           `$RepoOwner = '$RepoOwner'
           `$RepoName = '$RepoName'
           `$RunId = '$RunId'
           `$ArtifactName = '$ArtifactName'
-          `$TEMP_ZIP = 'C:\Users\Administrator\temp_artifact.zip'
           `$URL = "https://api.github.com/repos/$RepoOwner/$RepoName/actions/runs/$RunId/artifacts"
           `$HEADERS = @{
               "Authorization" = "token `$GhToken";
@@ -72,33 +75,42 @@ jobs:
 
           Install-WindowsFeature -Name Web-Server -IncludeManagementTools
 
+          if (-not (Test-Path `$ArtifactPath)) {
+              New-Item -ItemType Directory -Path `$ArtifactPath -Force
+          }
+
           `$RESPONSE = Invoke-RestMethod -Uri `$URL -Headers `$HEADERS
           `$ARTIFACT = `$RESPONSE.artifacts | Where-Object { `$_.name -eq `$ArtifactName }
           if (-not `$ARTIFACT) { throw "Artifact `$ArtifactName not found in the run." }
           `$DOWNLOAD_URL = `$ARTIFACT.archive_download_url
-          Invoke-WebRequest -Uri `$DOWNLOAD_URL -Headers `$HEADERS -OutFile `$TEMP_ZIP
+          Invoke-WebRequest -Uri `$DOWNLOAD_URL -Headers `$HEADERS -OutFile `$ArtifactZip
 
-          if (-not (Test-Path -Path `$DeployPath)) { New-Item -ItemType Directory -Path `$DeployPath -Force }
+          if (-not (Test-Path -Path `$DeployPath)) {
+              New-Item -ItemType Directory -Path `$DeployPath -Force
+          }
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::ExtractToDirectory(`$TEMP_ZIP, `$DeployPath)
-          Remove-Item -Path `$TEMP_ZIP
+          [System.IO.Compression.ZipFile]::ExtractToDirectory(`$ArtifactZip, `$DeployPath)
 
-          Write-Host "Contents of `$DeployPath after extraction:"
+          Write-Host "📂 Folder tree under `$DeployPath after extraction:"
           Get-ChildItem -Path `$DeployPath -Recurse | Select-Object FullName
 
           `$dllPath = Get-ChildItem -Path `$DeployPath -Recurse -Filter "LoginApi.dll" | Select-Object -First 1
           if (`$dllPath) {
               `$sourceFolder = `$dllPath.Directory.FullName
-              Write-Host "Found LoginApi.dll in: `$sourceFolder. Moving contents to `$DeployPath..."
+              Write-Host "✅ Found LoginApi.dll in: `$sourceFolder"
               Get-ChildItem -Path "`$sourceFolder\*" -Force | Move-Item -Destination `$DeployPath -Force
               Remove-Item -Path `$sourceFolder -Recurse -Force
           } else {
-              Write-Host "ERROR: LoginApi.dll not found in extracted artifact."
+              Write-Host "❌ LoginApi.dll not found in extracted artifact."
           }
 
-          Write-Host "Final contents of `$DeployPath:"
+          Write-Host "📦 Final contents of `$DeployPath:"
           Get-ChildItem -Path `$DeployPath -Recurse | Select-Object FullName
+
+          Write-Host "🔍 Checking for required files:"
+          Write-Host "LoginApi.dll exists: $(Test-Path "$DeployPath\LoginApi.dll")"
+          Write-Host "web.config exists: $(Test-Path "$DeployPath\web.config")"
 
           Import-Module WebAdministration
           if (-not (Test-Path IIS:\AppPools\$AppPool)) {
@@ -109,7 +121,7 @@ jobs:
               New-WebApplication -Site "Default Web Site" -Name "LoginApi" -PhysicalPath `$DeployPath -ApplicationPool `$AppPool
           }
           Restart-WebAppPool -Name `$AppPool
-          Write-Host "Deployment successful and App Pool `$AppPool restarted."
+          Write-Host "🚀 Deployment complete. IIS App Pool restarted."
 
           `$pgInstaller = "https://get.enterprisedb.com/postgresql/postgresql-15.5-1-windows-x64.exe"
           `$pgExe = "C:\Users\Administrator\pginstaller.exe"
@@ -119,9 +131,9 @@ jobs:
           Push-Location `$DeployPath
           if (Test-Path "LoginApi.dll") {
               dotnet LoginApi.dll migrate
-              Write-Host "Migration completed."
+              Write-Host "✅ Migration completed."
           } else {
-              Write-Host "Migration skipped: LoginApi.dll not found."
+              Write-Host "⚠️ Migration skipped: LoginApi.dll not found."
           }
           Pop-Location
           "@
