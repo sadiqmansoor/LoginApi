@@ -88,11 +88,11 @@ jobs:
           Remove-Item -Path `$TEMP_ZIP
 
           # --- Flatten nested publish folder if present ---
-          `$nestedPath = Join-Path `$DeployPath "publish"
-          if (Test-Path `$nestedPath) {
-              Write-Host "Flattening nested publish folder..."
-              Get-ChildItem -Path `$nestedPath -Recurse | Move-Item -Destination `$DeployPath -Force
-              Remove-Item -Path `$nestedPath -Recurse -Force
+          `$nestedRoot = Get-ChildItem -Path `$DeployPath -Directory | Where-Object { Test-Path "$($_.FullName)\LoginApi.dll" }
+          if (`$nestedRoot) {
+              Write-Host "Flattening nested folder: $($nestedRoot.FullName)"
+              Get-ChildItem -Path `$nestedRoot.FullName -Recurse | Move-Item -Destination `$DeployPath -Force
+              Remove-Item -Path `$nestedRoot.FullName -Recurse -Force
           }
 
           # --- Configure IIS Application ---
