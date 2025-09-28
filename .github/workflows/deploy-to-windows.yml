@@ -44,6 +44,7 @@ jobs:
           $deployPath = "C:\inetpub\wwwroot\LoginApi"
           $artifactPath = "C:\Users\Administrator\Artifacts"
           $artifactZip = "$artifactPath\loginapi.zip"
+          $tempExtract = "C:\Temp\LoginApiExtract"
           $appPool = "LoginApiAppPool"
           $GhToken = "${{ secrets.GITHUB_TOKEN }}"
           $RepoOwner = "${{ github.repository_owner }}"
@@ -61,13 +62,14 @@ jobs:
           `$DeployPath = '$deployPath'
           `$ArtifactPath = '$artifactPath'
           `$ArtifactZip = '$artifactZip'
+          `$TempExtract = '$tempExtract'
           `$AppPool = '$appPool'
           `$GhToken = '$GhToken'
           `$RepoOwner = '$RepoOwner'
           `$RepoName = '$RepoName'
           `$RunId = '$RunId'
           `$ArtifactName = '$ArtifactName'
-          `$URL = "https://api.github.com/repos/$RepoOwner/$RepoName/actions/runs/$RunId/artifacts"
+          `$URL = "https://api.github.com/repos/`$RepoOwner/`$RepoName/actions/runs/`$RunId/artifacts"
           `$HEADERS = @{
               "Authorization" = "token `$GhToken";
               "Accept" = "application/vnd.github.v3+json";
@@ -79,34 +81,37 @@ jobs:
               New-Item -ItemType Directory -Path `$ArtifactPath -Force
           }
 
+          Write-Host "📥 Fetching artifact metadata..."
           `$RESPONSE = Invoke-RestMethod -Uri `$URL -Headers `$HEADERS
           `$ARTIFACT = `$RESPONSE.artifacts | Where-Object { `$_.name -eq `$ArtifactName }
           if (-not `$ARTIFACT) { throw "Artifact `$ArtifactName not found in the run." }
+
           `$DOWNLOAD_URL = `$ARTIFACT.archive_download_url
+          Write-Host "📥 Artifact download URL: `$DOWNLOAD_URL"
           Invoke-WebRequest -Uri `$DOWNLOAD_URL -Headers `$HEADERS -OutFile `$ArtifactZip
 
-          if (-not (Test-Path -Path `$DeployPath)) {
-              New-Item -ItemType Directory -Path `$DeployPath -Force
+          if (-not (Test-Path `$ArtifactZip)) {
+              throw "❌ ZIP file was not downloaded. Check token and permissions."
+          }
+
+          if (-not (Test-Path `$TempExtract)) {
+              New-Item -ItemType Directory -Path `$TempExtract -Force
           }
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::ExtractToDirectory(`$ArtifactZip, `$DeployPath)
+          [System.IO.Compression.ZipFile]::ExtractToDirectory(`$ArtifactZip, `$TempExtract)
 
-          Write-Host "📂 Folder tree under `$DeployPath after extraction:"
-          Get-ChildItem -Path `$DeployPath -Recurse | Select-Object FullName
+          Write-Host "📂 Contents of extracted folder:"
+          Get-ChildItem -Path `$TempExtract -Recurse | Select-Object FullName
 
-          `$dllPath = Get-ChildItem -Path `$DeployPath -Recurse -Filter "LoginApi.dll" | Select-Object -First 1
+          `$dllPath = Get-ChildItem -Path `$TempExtract -Recurse -Filter "LoginApi.dll" | Select-Object -First 1
           if (`$dllPath) {
               `$sourceFolder = `$dllPath.Directory.FullName
               Write-Host "✅ Found LoginApi.dll in: `$sourceFolder"
-              Get-ChildItem -Path "`$sourceFolder\*" -Force | Move-Item -Destination `$DeployPath -Force
-
-              `$nestedRoot = `$sourceFolder
-              while (`$nestedRoot -ne `$DeployPath) {
-                  Remove-Item -Path `$nestedRoot -Recurse -Force
-                  `$nestedRoot = (Get-Item `$nestedRoot).Parent.FullName
-                  if (-not (`$nestedRoot.StartsWith(`$DeployPath))) { break }
+              if (-not (Test-Path `$DeployPath)) {
+                  New-Item -ItemType Directory -Path `$DeployPath -Force
               }
+              Get-ChildItem -Path "`$sourceFolder\*" -Force | Move-Item -Destination `$DeployPath -Force
           } else {
               Write-Host "❌ LoginApi.dll not found in extracted artifact."
           }
