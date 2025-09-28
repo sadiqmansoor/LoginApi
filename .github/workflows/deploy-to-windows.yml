@@ -46,7 +46,7 @@ jobs:
           $artifactZip = "$artifactPath\loginapi.zip"
           $tempExtract = "C:\Temp\LoginApiExtract"
           $appPool = "LoginApiAppPool"
-          $GhToken = "${{ secrets.GITHUB_TOKEN }}"
+          $GhToken = "${{ secrets.GH_TOKEN }}"
           $RepoOwner = "${{ github.repository_owner }}"
           $RepoName = "${{ github.event.repository.name }}"
           $RunId = "${{ github.run_id }}"
