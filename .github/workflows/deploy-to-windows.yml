@@ -8,6 +8,11 @@ jobs:
   deploy-loginapi-windows:
     runs-on: windows-latest
 
+    env:
+      EC2_HOST_WINDOWS: ${{ secrets.EC2_HOST_WINDOWS }}
+      EC2_ADMIN_PASSWORD: ${{ secrets.EC2_ADMIN_PASSWORD }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -38,15 +43,15 @@ jobs:
       - name: Deploy and Inspect Artifact on EC2
         shell: pwsh
         run: |
-          $remoteHost = "3.90.160.94"
+          $remoteHost = $env:EC2_HOST_WINDOWS
           $username = "Administrator"
-          $password = "${{ secrets.EC2_ADMIN_PASSWORD }}"
+          $password = $env:EC2_ADMIN_PASSWORD
           $deployPath = "C:\inetpub\wwwroot\LoginApi"
           $artifactPath = "C:\Users\Administrator\Artifacts"
           $artifactZip = "$artifactPath\loginapi.zip"
           $tempExtract = "C:\Temp\LoginApiExtract"
           $appPool = "LoginApiAppPool"
-          $GhToken = "${{ secrets.GH_TOKEN }}"
+          $GhToken = $env:GH_TOKEN
           $RepoOwner = "${{ github.repository_owner }}"
           $RepoName = "${{ github.event.repository.name }}"
           $RunId = "${{ github.run_id }}"
@@ -55,11 +60,13 @@ jobs:
           $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
           $credential = New-Object System.Management.Automation.PSCredential($username, $securePassword)
 
-          Write-Host "Establishing SSH session..."
-          $session = New-SSHSession -HostName $remoteHost -Credential $credential -AcceptKey -ErrorAction Stop
+          Write-Host "🔐 Establishing SSH session to $remoteHost..."
+          $session = New-SSHSession -HostName $remoteHost -Credential $credential -AcceptKey -ConnectionTimeout 30000 -ErrorAction Stop
 
           $finalCommand = @"
+          # Remote PowerShell script begins
           try {
+              # Define paths and metadata
               `$DeployPath = '$deployPath'
               `$ArtifactPath = '$artifactPath'
               `$ArtifactZip = '$artifactZip'
@@ -76,65 +83,49 @@ jobs:
                   "Accept" = "application/vnd.github.v3+json";
               }
 
+              # Ensure IIS is installed
               Install-WindowsFeature -Name Web-Server -IncludeManagementTools
 
+              # Create artifact directory
               if (-not (Test-Path `$ArtifactPath)) {
                   New-Item -ItemType Directory -Path `$ArtifactPath -Force
               }
 
-              Write-Host "📥 Fetching artifact metadata..."
+              # Fetch artifact metadata
               `$RESPONSE = Invoke-RestMethod -Uri `$URL -Headers `$HEADERS
               `$ARTIFACT = `$RESPONSE.artifacts | Where-Object { `$_.name -eq `$ArtifactName }
-              if (-not `$ARTIFACT) { throw "Artifact `$ArtifactName not found in the run." }
+              if (-not `$ARTIFACT) { throw "Artifact `$ArtifactName not found." }
 
+              # Download artifact
               `$DOWNLOAD_URL = `$ARTIFACT.archive_download_url
-              Write-Host "📥 Artifact download URL: `$DOWNLOAD_URL"
               Invoke-WebRequest -Uri `$DOWNLOAD_URL -Headers `$HEADERS -OutFile `$ArtifactZip
 
-              if (-not (Test-Path `$ArtifactZip)) {
-                  throw "❌ ZIP file was not downloaded. Check token and permissions."
-              }
-
+              # Extract artifact
               if (-not (Test-Path `$TempExtract)) {
                   New-Item -ItemType Directory -Path `$TempExtract -Force
               }
-
               Add-Type -AssemblyName System.IO.Compression.FileSystem
               [System.IO.Compression.ZipFile]::ExtractToDirectory(`$ArtifactZip, `$TempExtract)
 
-              Write-Host "📦 Installing .NET 8.0 Runtime and SDK..."
-              `$dotnetRuntimeUrl = "https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-aspnetcore-8.0-windows-x64-installer"
-              `$dotnetSdkUrl = "https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/sdk-8.0-windows-x64-installer"
+              # Install .NET 8.0
               `$runtimeInstaller = "C:\Temp\dotnet-runtime.exe"
               `$sdkInstaller = "C:\Temp\dotnet-sdk.exe"
-              Invoke-WebRequest -Uri `$dotnetRuntimeUrl -OutFile `$runtimeInstaller
-              Invoke-WebRequest -Uri `$dotnetSdkUrl -OutFile `$sdkInstaller
+              Invoke-WebRequest -Uri "https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-aspnetcore-8.0-windows-x64-installer" -OutFile `$runtimeInstaller
+              Invoke-WebRequest -Uri "https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/sdk-8.0-windows-x64-installer" -OutFile `$sdkInstaller
               Start-Process -FilePath `$runtimeInstaller -ArgumentList "/quiet" -Wait
               Start-Process -FilePath `$sdkInstaller -ArgumentList "/quiet" -Wait
-              Write-Host "✅ .NET installation complete."
 
-              Write-Host "📂 Contents of extracted folder:"
-              Get-ChildItem -Path `$TempExtract -Recurse | Select-Object FullName
-
+              # Move files to deploy path
               `$dllPath = Get-ChildItem -Path `$TempExtract -Recurse -Filter "LoginApi.dll" | Select-Object -First 1
               if (`$dllPath) {
                   `$sourceFolder = `$dllPath.Directory.FullName
-                  Write-Host "✅ Found LoginApi.dll in: `$sourceFolder"
                   if (-not (Test-Path `$DeployPath)) {
                       New-Item -ItemType Directory -Path `$DeployPath -Force
                   }
                   Get-ChildItem -Path "`$sourceFolder\*" -Force | Move-Item -Destination `$DeployPath -Force
-              } else {
-                  Write-Host "❌ LoginApi.dll not found in extracted artifact."
               }
 
-              Write-Host "📦 Final contents of `$DeployPath:"
-              Get-ChildItem -Path `$DeployPath -Recurse | Select-Object FullName
-
-              Write-Host "🔍 Checking for required files:"
-              Write-Host "LoginApi.dll exists: $(Test-Path "`$DeployPath\LoginApi.dll")"
-              Write-Host "web.config exists: $(Test-Path "`$DeployPath\web.config")"
-
+              # Setup IIS
               Import-Module WebAdministration
               if (-not (Test-Path IIS:\AppPools\$AppPool)) {
                   New-WebAppPool -Name `$AppPool
@@ -144,19 +135,17 @@ jobs:
                   New-WebApplication -Site "Default Web Site" -Name "LoginApi" -PhysicalPath `$DeployPath -ApplicationPool `$AppPool
               }
               Restart-WebAppPool -Name `$AppPool
-              Write-Host "🚀 Deployment complete. IIS App Pool restarted."
 
+              # Optional: Install PostgreSQL silently
               `$pgInstaller = "https://get.enterprisedb.com/postgresql/postgresql-15.5-1-windows-x64.exe"
               `$pgExe = "C:\Users\Administrator\pginstaller.exe"
               Invoke-WebRequest -Uri `$pgInstaller -OutFile `$pgExe
               Start-Process -FilePath `$pgExe -ArgumentList "--mode unattended --unattendedmodeui minimal --superpassword postgres123 --prefix C:\PostgreSQL" -Wait
 
+              # Run migration
               Push-Location `$DeployPath
               if (Test-Path "LoginApi.dll") {
                   dotnet LoginApi.dll migrate
-                  Write-Host "✅ Migration completed."
-              } else {
-                  Write-Host "⚠️ Migration skipped: LoginApi.dll not found."
               }
               Pop-Location
           } catch {
