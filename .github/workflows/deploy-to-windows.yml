@@ -40,16 +40,20 @@ jobs:
         run: |
           Install-Module -Name Posh-SSH -Force -Scope CurrentUser
 
-      - name: Deploy and Inspect Artifact on EC2
+      - name: Deploy and Configure EC2
         shell: pwsh
         run: |
           $remoteHost = $env:EC2_HOST_WINDOWS
-          if (-not $remoteHost) {
-              throw "❌ EC2_HOST_WINDOWS is not set. Check GitHub secrets."
-          }
+          if (-not $remoteHost) { throw "❌ EC2_HOST_WINDOWS is not set." }
 
           $username = "Administrator"
           $password = $env:EC2_ADMIN_PASSWORD
+          $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+          $credential = New-Object System.Management.Automation.PSCredential($username, $securePassword)
+
+          Write-Host "🔐 Connecting to EC2 at $remoteHost..."
+          $session = New-SSHSession -HostName $remoteHost -Credential $credential -AcceptKey -ConnectionTimeout 30000 -ErrorAction Stop
+
           $deployPath = "C:\inetpub\wwwroot\LoginApi"
           $artifactPath = "C:\Users\Administrator\Artifacts"
           $artifactZip = "$artifactPath\loginapi.zip"
@@ -61,81 +65,82 @@ jobs:
           $RunId = "${{ github.run_id }}"
           $ArtifactName = "loginapi-publish"
 
-          $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
-          $credential = New-Object System.Management.Automation.PSCredential($username, $securePassword)
-
-          Write-Host "🔐 Establishing SSH session to $remoteHost..."
-          $session = New-SSHSession -HostName $remoteHost -Credential $credential -AcceptKey -ConnectionTimeout 30000 -ErrorAction Stop
-
           $finalCommand = @"
           try {
-              `$DeployPath = '$deployPath'
-              `$ArtifactPath = '$artifactPath'
-              `$ArtifactZip = '$artifactZip'
-              `$TempExtract = '$tempExtract'
-              `$AppPool = '$appPool'
-              `$GhToken = '$GhToken'
-              `$RepoOwner = '$RepoOwner'
-              `$RepoName = '$RepoName'
-              `$RunId = '$RunId'
-              `$ArtifactName = '$ArtifactName'
-              `$URL = "https://api.github.com/repos/`$RepoOwner/`$RepoName/actions/runs/`$RunId/artifacts"
-              `$HEADERS = @{
-                  "Authorization" = "token `$GhToken";
-                  "Accept" = "application/vnd.github.v3+json";
-              }
-
+              # IIS Setup
               Install-WindowsFeature -Name Web-Server -IncludeManagementTools
 
-              if (-not (Test-Path `$ArtifactPath)) {
-                  New-Item -ItemType Directory -Path `$ArtifactPath -Force
-              }
+              # .NET 8.0 Installation
+              Write-Host "📦 Installing .NET 8.0..."
+              \$runtimeUrl = "https://download.visualstudio.microsoft.com/download/pr/7f8f3c3a-9f3a-4f9e-9f6e-3e9f3c3a9f3a/7f8f3c3a9f3a4f9e9f6e3e9f3c3a9f3a/dotnet-runtime-8.0.0-win-x64.exe"
+              \$sdkUrl = "https://download.visualstudio.microsoft.com/download/pr/8f9e3c3a-7f8f-4f9e-9f6e-3e9f3c3a9f3a/8f9e3c3a7f8f4f9e9f6e3e9f3c3a9f3a/dotnet-sdk-8.0.100-win-x64.exe"
+              \$runtimeInstaller = "C:\Temp\dotnet-runtime.exe"
+              \$sdkInstaller = "C:\Temp\dotnet-sdk.exe"
+              Invoke-WebRequest -Uri \$runtimeUrl -OutFile \$runtimeInstaller
+              Invoke-WebRequest -Uri \$sdkUrl -OutFile \$sdkInstaller
+              Start-Process -FilePath \$runtimeInstaller -ArgumentList "/quiet" -Wait
+              Start-Process -FilePath \$sdkInstaller -ArgumentList "/quiet" -Wait
+              Write-Host "✅ .NET installed."
 
-              `$RESPONSE = Invoke-RestMethod -Uri `$URL -Headers `$HEADERS
-              `$ARTIFACT = `$RESPONSE.artifacts | Where-Object { `$_.name -eq `$ArtifactName }
-              if (-not `$ARTIFACT) { throw "Artifact `$ArtifactName not found." }
+              # PostgreSQL Installation
+              Write-Host "🐘 Installing PostgreSQL..."
+              \$pgInstaller = "https://get.enterprisedb.com/postgresql/postgresql-15.5-1-windows-x64.exe"
+              \$pgExe = "C:\Temp\pginstaller.exe"
+              Invoke-WebRequest -Uri \$pgInstaller -OutFile \$pgExe
+              Start-Process -FilePath \$pgExe -ArgumentList "--mode unattended --unattendedmodeui minimal --superpassword postgres123 --prefix C:\PostgreSQL" -Wait
+              Write-Host "✅ PostgreSQL installed."
 
-              `$DOWNLOAD_URL = `$ARTIFACT.archive_download_url
-              Invoke-WebRequest -Uri `$DOWNLOAD_URL -Headers `$HEADERS -OutFile `$ArtifactZip
+              # Artifact Download
+              \$URL = "https://api.github.com/repos/$RepoOwner/$RepoName/actions/runs/$RunId/artifacts"
+              \$HEADERS = @{ Authorization = "token $GhToken"; Accept = "application/vnd.github.v3+json" }
+              if (-not (Test-Path "$artifactPath")) { New-Item -ItemType Directory -Path "$artifactPath" -Force }
+              \$RESPONSE = Invoke-RestMethod -Uri \$URL -Headers \$HEADERS
+              \$ARTIFACT = \$RESPONSE.artifacts | Where-Object { \$_.name -eq "$ArtifactName" }
+              if (-not \$ARTIFACT) { throw "Artifact not found." }
+              \$DOWNLOAD_URL = \$ARTIFACT.archive_download_url
+              Invoke-WebRequest -Uri \$DOWNLOAD_URL -Headers \$HEADERS -OutFile "$artifactZip"
 
-              if (-not (Test-Path `$TempExtract)) {
-                  New-Item -ItemType Directory -Path `$TempExtract -Force
-              }
-
+              # Extract Artifact
+              if (-not (Test-Path "$tempExtract")) { New-Item -ItemType Directory -Path "$tempExtract" -Force }
               Add-Type -AssemblyName System.IO.Compression.FileSystem
-              [System.IO.Compression.ZipFile]::ExtractToDirectory(`$ArtifactZip, `$TempExtract)
+              [System.IO.Compression.ZipFile]::ExtractToDirectory("$artifactZip", "$tempExtract")
 
-              `$dllPath = Get-ChildItem -Path `$TempExtract -Recurse -Filter "LoginApi.dll" | Select-Object -First 1
-              if (`$dllPath) {
-                  `$sourceFolder = `$dllPath.Directory.FullName
-                  if (-not (Test-Path `$DeployPath)) {
-                      New-Item -ItemType Directory -Path `$DeployPath -Force
-                  }
-                  Get-ChildItem -Path "`$sourceFolder\*" -Force | Move-Item -Destination `$DeployPath -Force
+              # Deploy to IIS
+              \$dllPath = Get-ChildItem -Path "$tempExtract" -Recurse -Filter "LoginApi.dll" | Select-Object -First 1
+              if (\$dllPath) {
+                  \$sourceFolder = \$dllPath.Directory.FullName
+                  if (-not (Test-Path "$deployPath")) { New-Item -ItemType Directory -Path "$deployPath" -Force }
+                  Get-ChildItem -Path "\$sourceFolder\*" -Force | Move-Item -Destination "$deployPath" -Force
+              } else {
+                  throw "LoginApi.dll not found."
               }
 
               Import-Module WebAdministration
-              if (-not (Test-Path IIS:\AppPools\$AppPool)) {
-                  New-WebAppPool -Name `$AppPool
-                  Set-ItemProperty IIS:\AppPools\$AppPool -Name "managedRuntimeVersion" -Value ""
+              if (-not (Test-Path IIS:\AppPools\$appPool)) {
+                  New-WebAppPool -Name "$appPool"
+                  Set-ItemProperty IIS:\AppPools\$appPool -Name "managedRuntimeVersion" -Value ""
               }
               if (-not (Test-Path IIS:\Sites\Default Web Site\LoginApi)) {
-                  New-WebApplication -Site "Default Web Site" -Name "LoginApi" -PhysicalPath `$DeployPath -ApplicationPool `$AppPool
+                  New-WebApplication -Site "Default Web Site" -Name "LoginApi" -PhysicalPath "$deployPath" -ApplicationPool "$appPool"
               }
-              Restart-WebAppPool -Name `$AppPool
+              Restart-WebAppPool -Name "$appPool"
 
-              Push-Location `$DeployPath
+              # Run Migration
+              Push-Location "$deployPath"
               if (Test-Path "LoginApi.dll") {
                   dotnet LoginApi.dll migrate
+                  Write-Host "✅ Migration completed."
+              } else {
+                  Write-Host "⚠️ Migration skipped: LoginApi.dll missing."
               }
               Pop-Location
           } catch {
-              Write-Host "❌ Remote script error: $($_.Exception.Message)"
+              Write-Host "❌ Deployment error: \$($_.Exception.Message)"
           }
           "@
 
           $response = Invoke-SSHCommand -SshSession $session -Command $finalCommand
-          Write-Host "🔧 Remote command output:"
+          Write-Host "🔧 Remote output:"
           $response.Output
           Write-Host "🔚 Exit status: $($response.ExitStatus)"
 
