@@ -17,7 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Setup .NET
+      - name: Setup .NET on runner
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '8.0.x'
@@ -37,104 +37,81 @@ jobs:
 
       - name: Install Posh-SSH Module
         shell: pwsh
-        run: |
-          Install-Module -Name Posh-SSH -Force -Scope CurrentUser
+        run: Install-Module -Name Posh-SSH -Force -Scope CurrentUser
 
-      - name: Deploy and Configure EC2
+      - name: Install and Deploy on EC2
         shell: pwsh
         run: |
           $remoteHost = $env:EC2_HOST_WINDOWS
-          if (-not $remoteHost) { throw "❌ EC2_HOST_WINDOWS is not set." }
-
           $username = "Administrator"
           $password = $env:EC2_ADMIN_PASSWORD
           $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
           $credential = New-Object System.Management.Automation.PSCredential($username, $securePassword)
 
-          Write-Host "🔐 Connecting to EC2 at $remoteHost..."
-          $session = New-SSHSession -HostName $remoteHost -Credential $credential -AcceptKey -ConnectionTimeout 30000 -ErrorAction Stop
+          $session = New-SSHSession -HostName $remoteHost -Credential $credential -AcceptKey -ConnectionTimeout 30000
 
-          $deployPath = "C:\inetpub\wwwroot\LoginApi"
-          $artifactPath = "C:\Artifacts"
-          $artifactZip = "$artifactPath\loginapi.zip"
-          $tempExtract = "C:\Temp\LoginApiExtract"
-          $appPool = "LoginApiAppPool"
-          $GhToken = $env:GH_TOKEN
-          $RepoOwner = "${{ github.repository_owner }}"
-          $RepoName = "${{ github.event.repository.name }}"
-          $RunId = "${{ github.run_id }}"
-          $ArtifactName = "loginapi-publish"
-
-          $finalCommand = @"
-          try {
-              # Install Chocolatey if missing
-              if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-                  Set-ExecutionPolicy Bypass -Scope Process -Force
-                  [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-                  Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-              }
-
-              # Install .NET 8.0 SDK
-              choco install dotnet-sdk --version=8.0.100 -y
-              choco install dotnet-runtime --version=8.0.0 -y
-
-              # Install PostgreSQL
-              choco install postgresql --version=15.5 -y
-
-              # Create artifact path
-              if (-not (Test-Path "$artifactPath")) { New-Item -ItemType Directory -Path "$artifactPath" -Force }
-
-              # Download artifact
-              $URL = "https://api.github.com/repos/$RepoOwner/$RepoName/actions/runs/$RunId/artifacts"
-              $HEADERS = @{ Authorization = "token $GhToken"; Accept = "application/vnd.github.v3+json" }
-              $RESPONSE = Invoke-RestMethod -Uri $URL -Headers $HEADERS
-              $ARTIFACT = $RESPONSE.artifacts | Where-Object { $_.name -eq "$ArtifactName" }
-              if (-not $ARTIFACT) { throw "Artifact not found." }
-              $DOWNLOAD_URL = $ARTIFACT.archive_download_url
-              Invoke-WebRequest -Uri $DOWNLOAD_URL -Headers $HEADERS -OutFile "$artifactZip"
-
-              # Extract artifact
-              if (-not (Test-Path "$tempExtract")) { New-Item -ItemType Directory -Path "$tempExtract" -Force }
-              Add-Type -AssemblyName System.IO.Compression.FileSystem
-              [System.IO.Compression.ZipFile]::ExtractToDirectory("$artifactZip", "$tempExtract", $true)
-
-              # Copy files to deploy path
-              $dllPath = Get-ChildItem -Path "$tempExtract" -Recurse -Filter "LoginApi.dll" | Select-Object -First 1
-              if ($dllPath) {
-                  $sourceFolder = $dllPath.Directory.FullName
-                  if (-not (Test-Path "$deployPath")) { New-Item -ItemType Directory -Path "$deployPath" -Force }
-                  Copy-Item -Path "$sourceFolder\*" -Destination "$deployPath" -Recurse -Force
-              } else {
-                  throw "LoginApi.dll not found in extracted artifact."
-              }
-
-              # Setup IIS
-              Import-Module WebAdministration
-              if (-not (Test-Path IIS:\AppPools\$appPool)) {
-                  New-WebAppPool -Name "$appPool"
-                  Set-ItemProperty IIS:\AppPools\$appPool -Name "managedRuntimeVersion" -Value ""
-              }
-              if (-not (Test-Path IIS:\Sites\Default Web Site\LoginApi)) {
-                  New-WebApplication -Site "Default Web Site" -Name "LoginApi" -PhysicalPath "$deployPath" -ApplicationPool "$appPool"
-              }
-              Restart-WebAppPool -Name "$appPool"
-
-              # Run migration
-              Push-Location "$deployPath"
-              if (Get-Command dotnet -ErrorAction SilentlyContinue) {
-                  dotnet LoginApi.dll migrate
-              } else {
-                  throw "dotnet CLI not available after installation."
-              }
-              Pop-Location
-          } catch {
-              Write-Host "❌ Deployment error: $($_.Exception.Message)"
+          $deployScript = @'
+          # Install Chocolatey if necessary
+          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            iex ((New-Object System.Net.WebClient).DownloadString("https://community.chocolatey.org/install.ps1"))
           }
-          "@
+          # Install .NET SDK and Runtime
+          choco install dotnet-sdk --version=8.0.100 -y
+          choco install dotnet-runtime --version=8.0.0 -y
 
-          $response = Invoke-SSHCommand -SshSession $session -Command $finalCommand
-          Write-Host "🔧 Remote output:"
-          $response.Output
-          Write-Host "🔚 Exit status: $($response.ExitStatus)"
+          # Confirm dotnet is available and reload environment if necessary
+          & cmd /c "refreshenv"
 
+          # Download and extract artifact using GitHub API with proper headers
+          $artifactZip = "C:\Artifacts\loginapi.zip"
+          $tempExtract = "C:\Temp\LoginApiExtract"
+          $deployPath = "C:\inetpub\wwwroot\LoginApi"
+          $appPool = "LoginApiAppPool"
+
+          # Create directories
+          if (-not (Test-Path $artifactZip)) { New-Item -ItemType Directory -Path (Split-Path $artifactZip) -Force }
+          if (-not (Test-Path $tempExtract)) { New-Item -ItemType Directory -Path $tempExtract -Force }
+          if (-not (Test-Path $deployPath)) { New-Item -ItemType Directory -Path $deployPath -Force }
+
+          # Prepare API call for artifacts (use passed environment variables for URL and token)
+          $repoOwner = "${{ github.repository_owner }}"
+          $repoName = "${{ github.repository.name }}"
+          $runId = "${{ github.run_id }}"
+          $token = "${{ secrets.GH_TOKEN }}"
+          $headers = @{ Authorization = "token $token"; Accept = "application/vnd.github.v3+json" }
+          $url = "https://api.github.com/repos/$repoOwner/$repoName/actions/runs/$runId/artifacts"
+          $response = Invoke-RestMethod -Uri $url -Headers $headers
+          $artifact = $response.artifacts | Where-Object { $_.name -eq 'loginapi-publish' }
+          if (-not $artifact) { throw "Artifact not found" }
+          $downloadUrl = $artifact.archive_download_url
+          Invoke-WebRequest -Uri $downloadUrl -Headers $headers -OutFile $artifactZip
+
+          # Extract artifact
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($artifactZip, $tempExtract, $true)
+
+          # Copy artifact files to deploy path
+          Copy-Item -Path "$tempExtract\*" -Destination $deployPath -Recurse -Force
+
+          # Setup IIS Application Pool and Web App
+          Import-Module WebAdministration
+          if (-not (Test-Path IIS:\AppPools\$appPool)) {
+            New-WebAppPool -Name $appPool
+            Set-ItemProperty IIS:\AppPools\$appPool -Name "managedRuntimeVersion" -Value ""
+          }
+          if (-not (Test-Path IIS:\Sites\Default Web Site\LoginApi)) {
+            New-WebApplication -Site 'Default Web Site' -Name 'LoginApi' -PhysicalPath $deployPath -ApplicationPool $appPool
+          }
+          Restart-WebAppPool $appPool
+
+          # Run dotnet migration command
+          Push-Location $deployPath
+          dotnet LoginApi.dll migrate
+          Pop-Location
+          '@
+
+          $response = Invoke-SSHCommand -SshSession $session -Command $deployScript
+          Write-Host "Remote Output: $($response.Output)"
           Remove-SSHSession -SshSession $session
