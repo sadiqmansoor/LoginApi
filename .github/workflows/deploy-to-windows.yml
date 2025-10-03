@@ -9,7 +9,7 @@ jobs:
     runs-on: windows-latest
 
     env:
-      EC2_HOST_WINDOWS: ${{ secrets.EC2_HOST_WINDOWS }}
+      EC2_HOST_WINDOWS: ${{ vars.EC2_HOST_WINDOWS }}
       EC2_ADMIN_PASSWORD: ${{ secrets.EC2_ADMIN_PASSWORD }}
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
