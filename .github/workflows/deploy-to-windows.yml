@@ -103,17 +103,28 @@ jobs:
               # Extract Artifact
               if (-not (Test-Path "$tempExtract")) { New-Item -ItemType Directory -Path "$tempExtract" -Force }
               Add-Type -AssemblyName System.IO.Compression.FileSystem
-              [System.IO.Compression.ZipFile]::ExtractToDirectory("$artifactZip", "$tempExtract")
+              [System.IO.Compression.ZipFile]::ExtractToDirectory("$artifactZip", "$tempExtract", \$true)
+
+              Write-Host "📂 Extracted contents:"
+              Get-ChildItem -Path "$tempExtract" -Recurse | Select-Object FullName
 
               # Deploy to IIS
               \$dllPath = Get-ChildItem -Path "$tempExtract" -Recurse -Filter "LoginApi.dll" | Select-Object -First 1
               if (\$dllPath) {
                   \$sourceFolder = \$dllPath.Directory.FullName
+                  Write-Host "✅ Found LoginApi.dll in: \$sourceFolder"
+
                   if (-not (Test-Path "$deployPath")) { New-Item -ItemType Directory -Path "$deployPath" -Force }
-                  Get-ChildItem -Path "\$sourceFolder\*" -Force | Move-Item -Destination "$deployPath" -Force
+                  Get-ChildItem -Path "\$sourceFolder\*" -Recurse -Force | Copy-Item -Destination "$deployPath" -Force
+
+                  Write-Host "📦 Files copied to $deployPath"
               } else {
-                  throw "LoginApi.dll not found."
+                  throw "❌ LoginApi.dll not found in extracted artifact."
               }
+
+              Write-Host "🔍 Checking for required files:"
+              Write-Host "LoginApi.dll exists: $(Test-Path "$deployPath\LoginApi.dll")"
+              Write-Host "web.config exists: $(Test-Path "$deployPath\web.config")"
 
               Import-Module WebAdministration
               if (-not (Test-Path IIS:\AppPools\$appPool)) {
